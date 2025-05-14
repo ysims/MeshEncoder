@@ -8,8 +8,10 @@ class FeatureBackbone(torch.nn.Module):
         # Load the MobileNetV3 model
         if backbone == "mobilenetv3":
             self.backbone = models.mobilenet_v3_small(pretrained=True).features
+            self.output_size = 576
         elif backbone == "efficientnet":
             self.backbone = models.efficientnet_b0(pretrained=True).features
+            self.output_size = 1280  # EfficientNet-B0 output size
         else:
             raise ValueError("Unsupported backbone. Choose 'mobilenetv3' or 'efficientnet'.")
 

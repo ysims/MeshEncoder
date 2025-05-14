@@ -1,150 +1,96 @@
-import numpy as np
-import yaml
-import cv2
+import torch
 
-def load_lens_params(lens_file):
-    with open(lens_file, 'r') as f:
-        lens = yaml.safe_load(f)
-    
-    Hoc = np.array(lens['Hoc'])  # 4x4
-    centre = np.array(lens['centre'])  # 2D
-    focal_length = lens['focal_length']
-    k = lens['k']
-    projection = lens['projection']
-
-    return {
-        'Hoc': Hoc,
-        'centre': centre,
-        'focal_length': focal_length,
-        'k': k,
-        'projection': projection
-    }
-
-def world_grid(x_range, y_range, spacing=0.05):
-    """
-    Generate a grid of points (X, Y, 0) on the ground plane.
-    """
-    xs = np.arange(x_range[0], x_range[1], spacing)
-    ys = np.arange(y_range[0], y_range[1], spacing)
-    grid = np.array([[x, y, 0] for x in xs for y in ys])
-    return grid  # shape (N, 3)
-
-def valid_pixels(pixels, image_shape):
-    h, w = image_shape[:2]
-    mask = (
-        (pixels[:, 0] >= 0) & (pixels[:, 0] < w) &
-        (pixels[:, 1] >= 0) & (pixels[:, 1] < h)
-    )
-    return mask
-def project_to_image(points_3d, lens_params):
+def project_to_image(points_3d, lens):
     """
     Project 3D world points to 2D image pixels using fisheye EQUIDISTANT model.
     """
-    Hoc = lens_params['Hoc']
-    focal = lens_params['focal_length']
-    centre = lens_params['centre']
-    k = lens_params['k']
-    projection = lens_params['projection']
-    
-    # World to camera transformation in your coordinate system
-    R = Hoc[:3, :3]
-    t = np.array([0.0, 0.0, Hoc[2, 3]])  # Only Z translation
-    # R = np.eye(3)  # Identity rotation
+    Hoc = torch.tensor(lens['Hoc'], dtype=torch.float32)
+    Hco = torch.linalg.inv(Hoc)
+    R = Hco[:3, :3]
+    t = torch.tensor([0.0, 0.0, -Hoc[2, 3]], dtype=torch.float32)  # Only Z translation
 
-    cam_points = (R @ points_3d.T + t.reshape(3, 1)).T  # shape (N, 3)
+    cam_points = (R @ points_3d.T + t.reshape(3, 1)).T
 
-    # Convert to OpenCV's coordinate system
-    R_robot_to_camera = np.array([
-        [0, -1, 0],  # X_cam = -Y_robot
-        [0, 0, -1],  # Y_cam = -Z_robot
-        [1, 0, 0],   # Z_cam =  X_robot
-    ])
-    cam_points = (R_robot_to_camera @ cam_points.T).T  # shape (N, 3)
-
-    # Skip points behind the camera (z <= 0)
-    in_front = cam_points[:, 2] > 0
-    cam_points = cam_points[in_front]
     x, y, z = cam_points[:, 0], cam_points[:, 1], cam_points[:, 2]
-    theta = np.arctan2(np.sqrt(x**2 + y**2), z)
+    theta = torch.atan2(torch.sqrt(x**2 + y**2), z)
 
-    # EQUIDISTANT fisheye model
-    r = focal * theta * (1 + k[0]*theta**2 + k[1]*theta**4)
+    r = lens['focal_length'] * theta * (1 + lens['k'][0] * theta**2 + lens['k'][1] * theta**4)
 
-    phi = np.arctan2(y, x)
-    u = r * np.cos(phi) + centre[0]
-    v = r * np.sin(phi) + centre[1]
+    phi = torch.atan2(y, x)
+    u = r * torch.cos(phi) + lens['centre'][0]
+    v = r * torch.sin(phi) + lens['centre'][1]
 
-    pixels = np.stack([u, v], axis=-1)
+    pixels = torch.stack([u, v], dim=-1)
+
     return pixels, cam_points
 
-import matplotlib.pyplot as plt
-from mpl_toolkits.mplot3d import Axes3D
-
-def visualize_3d_points(points_3d):
-    fig = plt.figure()
-    ax = fig.add_subplot(111, projection='3d')
+def create_mesh(images, masks, lens):
+    """
+    Create a mesh using batched image and mask tensors.
     
-    # Plot the 3D points
-    ax.scatter(points_3d[:, 0], points_3d[:, 1], points_3d[:, 2], c='b', marker='o')
-    ax.set_xlabel('X axis')
-    ax.set_ylabel('Y axis')
-    ax.set_zlabel('Z axis')
-    plt.show()
-
-
-def create_mesh(image_path, lens_file):
-    image = cv2.imread(image_path)
-    lens_params = load_lens_params(lens_file)
-
-    # Image dimensions
-    height, width = image.shape[:2]
-
-    # Convert the normalized center coordinates to pixel coordinates
-    centre_normalized = lens_params['centre']
-    centre_x = centre_normalized[0] + (width / 2)
-    centre_y = centre_normalized[1] + (height / 2)
-
-    # Update lens_params['centre'] to be in pixel coordinates
-    lens_params['centre'] = np.array([centre_x, centre_y])
+    Args:
+        images (torch.Tensor): Batched image tensor of shape (B, C, H, W).
+        masks (torch.Tensor): Batched mask tensor of shape (B, H, W) or (B, C, H, W).
+        lens (dict): Lens parameters.
     
-    print(f"Image shape: {image.shape}")
-    print(f"Lens centre (normalized): {centre_normalized}")
-    print(f"Lens centre (pixel): {lens_params['centre']}")
+    Returns:
+        dict: A dictionary containing the world grid, camera grid, color grid, segmentation grid, and validity mask.
+    """
+    batch_size, _, height, width = images.shape
 
-    # Draw a larger red circle at the optical center (converted to pixel space)
-    cv2.circle(image, tuple(lens_params['centre'].astype(int)), 20, (0, 0, 255), 2)
+    # Convert normalized lens center to pixel coordinates
+    centre_normalized = torch.tensor(lens['centre'], dtype=torch.float32)
+    lens['centre'] = torch.tensor([
+        centre_normalized[0] + (width / 2),
+        centre_normalized[1] + (height / 2)
+    ], dtype=torch.float32)
 
-    # Create a grid of points on the ground in the world coordinate system
-    x_range = [0, 6]
-    y_range = [-3, 3]
-    spacing = 0.2
-    xs = np.arange(x_range[0], x_range[1], spacing)
-    ys = np.arange(y_range[0], y_range[1], spacing)
-    grid = np.array([[x, y, 0] for y in ys for x in xs])
+    # Create world grid (2D)
+    x_range = torch.tensor([0, 10], dtype=torch.float32)
+    y_range = torch.tensor([-6, 6], dtype=torch.float32)
+    spacing = 0.02
+    xs = torch.arange(x_range[0], x_range[1], spacing, dtype=torch.float32)
+    ys = torch.arange(y_range[0], y_range[1], spacing, dtype=torch.float32)
+    X, Y = torch.meshgrid(xs, ys, indexing='ij')  # shape (H, W)
+    H, W = X.shape
+    Z = torch.zeros_like(X)
+    world_grid = torch.stack([X, Y, Z], dim=-1)  # shape (H, W, 3)
 
-    # Visualize the 3D grid points (before projection)
-    visualize_3d_points(grid)
+    # Flatten for projection
+    world_points_flat = world_grid.reshape(-1, 3)
+    pixels, cam_points = project_to_image(world_points_flat, lens)  # (N, 2), (N, 3)
 
-    pixels, cam_points = project_to_image(grid, lens_params)
+    u = torch.round(pixels[:, 0]).long()
+    v = torch.round(pixels[:, 1]).long()
+    valid = (u >= 0) & (u < width) & (v >= 0) & (v < height)
 
-    # Keep only points in front of camera
-    in_front = cam_points[:, 2] > 0
-    pixels = pixels[in_front]
+    # Initialize output tensors
+    colour_grid = torch.zeros((batch_size, H, W, 3), dtype=torch.uint8)
+    cam_grid = torch.zeros((batch_size, H, W, 3), dtype=torch.float32)
+    seg_grid = torch.zeros((batch_size, H, W, 3), dtype=torch.uint8)
 
-    # Keep only pixels inside image bounds
-    valid = valid_pixels(pixels, image.shape)
-    pixels = pixels[valid]
+    for b in range(batch_size):
+        # Sample colors from the image
+        flat_colour_grid = torch.zeros((H * W, 3), dtype=torch.uint8)
+        flat_cam_grid = torch.zeros((H * W, 3), dtype=torch.float32)
+        flat_colour_grid[valid] = images[b, :, v[valid], u[valid]].permute(1, 0)
+        flat_cam_grid[valid] = cam_points[valid]
 
-    # Draw dots on image
-    for u, v in pixels.astype(int):
-        cv2.circle(image, (u, v), 1, (0, 255, 0), -1)
+        colour_grid[b] = flat_colour_grid.reshape(H, W, 3)
+        cam_grid[b] = flat_cam_grid.reshape(H, W, 3)
 
-    # Display image with projected points
-    cv2.imshow("Projected Points", image)
-    cv2.waitKey(0)
-    cv2.destroyAllWindows()
+        # Sample segmentation mask
+        if masks.shape[1] == 1:  # Single-channel mask
+            flat_seg_grid = torch.zeros((H * W, 1), dtype=torch.uint8)
+            flat_seg_grid[valid] = masks[b, 0, v[valid], u[valid]].unsqueeze(-1)
+        else:  # Multi-channel mask
+            flat_seg_grid = torch.zeros((H * W, 3), dtype=torch.uint8)
+            flat_seg_grid[valid] = masks[b, :, v[valid], u[valid]].permute(1, 0)
 
+        seg_grid[b] = flat_seg_grid.reshape(H, W, 3)
 
-if __name__ == "__main__":
-    create_mesh("test/image.jpg", "test/lens.yaml")
-    
+    return {
+        "cam_grid": cam_grid,
+        "colour_grid": colour_grid,
+        "seg_grid": seg_grid,
+    }
