@@ -31,9 +31,8 @@ class SoccerSegmentationDataset(Dataset):
         ])
 
         self.mask_transform = T.Compose([
-            T.PILToTensor(),  # returns ByteTensor [1, H, W]
-            T.Lambda(lambda x: x.squeeze(0)),  # make it [H, W]
-            T.Lambda(lambda x: x[:, :, :3]),  # remove alpha channel
+            T.ToTensor(),
+            T.Lambda(lambda x: x[:3, :, :] if x.shape[0] == 4 else x),
         ])
 
         self.joint_transform = JointTransform(hflip=True, rotation=True)
@@ -44,8 +43,12 @@ class SoccerSegmentationDataset(Dataset):
     def load_lens_params(self, path):
         with open(path, 'r') as f:
             params = yaml.safe_load(f)
-        # Add any processing if needed
-        return params
+        # Convert the lens parameters into a tensor
+        centre = torch.tensor(params['centre'], dtype=torch.float32)
+        focal_length = torch.tensor([params['focal_length']], dtype=torch.float32)
+        k = torch.tensor(params['k'], dtype=torch.float32)
+        Hoc = torch.tensor(params['Hoc'], dtype=torch.float32)
+        return torch.cat([centre, focal_length, k, Hoc.flatten()])
 
     def __getitem__(self, idx):
         # Load image
@@ -53,48 +56,45 @@ class SoccerSegmentationDataset(Dataset):
 
         # Load mask
         mask = Image.open(self.mask_paths[idx])
-
-        # Convert mask to classes
-        mask = np.array(mask)
-
-        mask = mask_to_class_indices(mask, self.classes)  # Convert to class indices
-        mask = torch.tensor(mask, dtype=torch.long)
-
-        # Load lens YAML
-        lens = self.load_lens_params(self.lens_paths[idx])
+        # print(mask.shape)
 
         # Apply transforms (augmentation happens here)
-        image = self.transform(image)
+        image = self.image_transform(image)
         mask = self.mask_transform(mask)
 
         # Apply joint augmentations
         if self.joint_transform:
             image, mask = self.joint_transform(image, mask)
+            
+        # Convert mask to classes
+        mask = mask.numpy()  # Convert to numpy for processing
+        mask = mask_to_class_indices(mask, self.classes).long() # Convert to class indices
 
-        return {
-            "image": image,       # Tensor [3, H, W]
-            "mask": mask,         # Tensor [H, W]
-            "lens": lens,         # dict
-        }
+        # Load lens YAML
+        lens = self.load_lens_params(self.lens_paths[idx])
+
+        return image, mask, lens
 
 def mask_to_class_indices(mask, classes):
     """
     Convert a segmentation mask from pixel colors to class indices.
 
     Args:
-        mask (np.ndarray): The segmentation mask as a NumPy array of shape [H, W, 3].
+        mask (np.ndarray): The segmentation mask as a NumPy array of shape [H, W, 4] or [H, W, 3].
         classes (list): A list of RGB tuples representing class colors.
 
     Returns:
         torch.Tensor: A tensor of shape [H, W] with class indices.
     """
+
     # Create a mapping from RGB tuples to class indices
     color_to_index = {tuple(color): idx for idx, color in enumerate(classes)}
 
     # Flatten the mask and map colors to indices
-    h, w, _ = mask.shape
+    _, h, w = mask.shape
     mask_flat = mask.reshape(-1, 3)
-    indices_flat = torch.tensor([color_to_index[tuple(pixel)] for pixel in mask_flat])
+
+    indices_flat = torch.tensor([color_to_index.get(tuple(pixel), 0) for pixel in mask_flat])
 
     # Reshape back to [H, W]
     return indices_flat.reshape(h, w)

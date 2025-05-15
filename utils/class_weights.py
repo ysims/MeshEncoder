@@ -13,8 +13,8 @@ def calculate_class_weights(dataset, num_classes):
     """
     class_counts = torch.zeros(num_classes, dtype=torch.long)
 
-    for sample in dataset:
-        mask = sample["mask"]
+    for _, mask, _ in dataset:
+        mask = mask
         for c in range(num_classes):
             class_counts[c] += (mask == c).sum()
 

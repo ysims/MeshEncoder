@@ -30,10 +30,11 @@ semantic_head = SemanticHead(in_channels=backbone.output_size, num_classes=len(a
 optimizer = optim.Adam(list(backbone.parameters()) + list(semantic_head.parameters()), lr=args.learning_rate, weight_decay=args.weight_decay)
 
 # Calculate class weights
-class_weights = calculate_class_weights(train_dataset, num_classes=len(args.classes))
+# class_weights = calculate_class_weights(train_dataset, num_classes=len(args.classes))
 
 # Loss function
-criterion = nn.CrossEntropyLoss(weight=class_weights.to(args.device))
+# criterion = nn.CrossEntropyLoss(weight=class_weights.to(args.device))
+criterion = nn.CrossEntropyLoss()
 
 # Metrics tracker
 metrics_tracker = MetricsTracker(num_classes=len(args.classes))
