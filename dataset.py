@@ -6,6 +6,7 @@ import numpy as np
 from torch.utils.data import Dataset
 from PIL import Image
 import torchvision.transforms as T
+import time
 from utils.transforms import JointTransform
 
 class SoccerSegmentationDataset(Dataset):
@@ -31,7 +32,7 @@ class SoccerSegmentationDataset(Dataset):
         ])
 
         self.mask_transform = T.Compose([
-            T.ToTensor(),
+            T.PILToTensor(),
             T.Lambda(lambda x: x[:3, :, :] if x.shape[0] == 4 else x),
         ])
 
@@ -56,45 +57,33 @@ class SoccerSegmentationDataset(Dataset):
 
         # Load mask
         mask = Image.open(self.mask_paths[idx])
-        # print(mask.shape)
 
-        # Apply transforms (augmentation happens here)
+        # Apply transforms
         image = self.image_transform(image)
         mask = self.mask_transform(mask)
 
-        # Apply joint augmentations
-        if self.joint_transform:
-            image, mask = self.joint_transform(image, mask)
+        # Apply joint augmentations (augmentation)
+        # if self.joint_transform:
+        #     image, mask = self.joint_transform(image, mask)
             
         # Convert mask to classes
-        mask = mask.numpy()  # Convert to numpy for processing
         mask = mask_to_class_indices(mask, self.classes).long() # Convert to class indices
 
         # Load lens YAML
         lens = self.load_lens_params(self.lens_paths[idx])
-
         return image, mask, lens
 
-def mask_to_class_indices(mask, classes):
+def mask_to_class_indices(mask: torch.Tensor, classes: list[tuple[int, int, int]]) -> torch.Tensor:
     """
-    Convert a segmentation mask from pixel colors to class indices.
-
-    Args:
-        mask (np.ndarray): The segmentation mask as a NumPy array of shape [H, W, 4] or [H, W, 3].
-        classes (list): A list of RGB tuples representing class colors.
-
-    Returns:
-        torch.Tensor: A tensor of shape [H, W] with class indices.
+    Fast version: Convert RGB mask (3,H,W) to class index mask (H,W) using vectorized matching.
     """
+    c, h, w = mask.shape
+    mask = mask.permute(1, 2, 0).reshape(-1, 3)  # [H*W, 3]
+    classes_tensor = torch.tensor(classes, dtype=torch.uint8, device=mask.device)  # [C, 3]
 
-    # Create a mapping from RGB tuples to class indices
-    color_to_index = {tuple(color): idx for idx, color in enumerate(classes)}
+    # Compute equality mask: [H*W, C]
+    matches = (mask[:, None, :] == classes_tensor[None, :, :]).all(dim=2).float()  # [H*W, C]
 
-    # Flatten the mask and map colors to indices
-    _, h, w = mask.shape
-    mask_flat = mask.reshape(-1, 3)
-
-    indices_flat = torch.tensor([color_to_index.get(tuple(pixel), 0) for pixel in mask_flat])
-
-    # Reshape back to [H, W]
-    return indices_flat.reshape(h, w)
+    # Get class indices or fallback to 0 (unknown)
+    indices = matches.argmax(dim=1)  # If no match, returns 0 (safe default)
+    return indices.reshape(h, w)

@@ -6,6 +6,7 @@ from utils.metrics import MetricsTracker
 from utils.mesh import create_mesh
 from setup import get_args
 
+import time
 import torch
 import torch.nn as nn
 import torch.optim as optim
@@ -47,6 +48,7 @@ for epoch in range(args.num_epochs):
     running_loss = 0.0
     metrics_tracker.reset()  # Reset metrics at the start of each epoch
     for i, (images, masks, lens) in enumerate(train_loader):
+        start = time.time()
         optimizer.zero_grad()
         
         images = images.to(args.device)
@@ -54,18 +56,16 @@ for epoch in range(args.num_epochs):
         
         # Sample ground plane mesh
         cam_grid, colour_grid, seg_grid = create_mesh(images, masks, lens)
+        grid_shape = colour_grid.shape[2:]
 
         # Backbone
         features = backbone(colour_grid)
 
         # Semantic head
-        outputs = semantic_head(features)
-        outputs = outputs.permute(0, 2, 3, 1)  # [B, H, W, num_classes]
-        outputs = outputs.view(-1, len(args.classes))
-        masks = masks.view(-1)  # Flatten the mask tensor 
+        outputs = semantic_head(features, grid_shape)
 
         # Compute loss
-        loss = criterion(outputs, masks)
+        loss = criterion(outputs, seg_grid)
         loss.backward()
         optimizer.step()
         
@@ -78,21 +78,20 @@ for epoch in range(args.num_epochs):
         # Sample ground plane mesh
         cam_grid, colour_grid, seg_grid = create_mesh(images, masks, lens)
 
+        grid_shape = colour_grid.shape[2:]
+
         # Backbone
         features = backbone(colour_grid)
 
         # Semantic head
-        outputs = semantic_head(features)
-        outputs = outputs.permute(0, 2, 3, 1)
-        outputs = outputs.view(-1, len(args.classes))
-        masks = masks.view(-1)
+        outputs = semantic_head(features, grid_shape)
         
         # Compute loss
-        loss = criterion(outputs, masks)
+        loss = criterion(outputs, seg_grid)
         running_loss += loss.item()
 
         # Calculate metrics
-        metrics_tracker.update(outputs, masks)
+        metrics_tracker.update(outputs, seg_grid)
 
     # Compute metrics
     metrics = metrics_tracker.compute()

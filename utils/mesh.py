@@ -73,8 +73,8 @@ def create_mesh(images, masks, lens):
     centres[:, 1] += height / 2
 
     # World grid
-    x_range = torch.linspace(0, 10, int(10 / 0.02), dtype=torch.float32, device=device)
-    y_range = torch.linspace(-6, 6, int(12 / 0.02), dtype=torch.float32, device=device)
+    x_range = torch.linspace(0, 6, int(6 / 0.03), dtype=torch.float32, device=device)
+    y_range = torch.linspace(-4.5, 4.5, int(9 / 0.03), dtype=torch.float32, device=device)
     X, Y = torch.meshgrid(x_range, y_range, indexing='ij')
     H, W = X.shape
     Z = torch.zeros_like(X)
@@ -117,7 +117,7 @@ def create_mesh(images, masks, lens):
     # Initialize outputs
     colour_grid = torch.zeros((batch_size, H * W, 3), dtype=torch.uint8, device=device)
     cam_grid = torch.zeros((batch_size, H * W, 3), dtype=torch.float32, device=device)
-    seg_grid = torch.zeros((batch_size, H * W, 3), dtype=torch.uint8, device=device)
+    seg_grid = torch.zeros((batch_size, H * W, 1), dtype=torch.uint8, device=device)
 
     # Set valid values using index_put_
     colour_grid.index_put_((batch_idx, flat_valid_idx), colours, accumulate=False)
@@ -127,11 +127,14 @@ def create_mesh(images, masks, lens):
     # Reshape
     colour_grid = colour_grid.view(batch_size, H, W, 3)
     cam_grid = cam_grid.view(batch_size, H, W, 3)
-    seg_grid = seg_grid.view(batch_size, H, W, 3)
+    seg_grid = seg_grid.view(batch_size, H, W).long()
 
     # Permute to (B, 3, H, W)
     colour_grid = colour_grid.permute(0, 3, 1, 2)  # (B, 3, H, W)
     cam_grid = cam_grid.permute(0, 3, 1, 2)          # (B, 3, H, W)
-    seg_grid = seg_grid.permute(0, 3, 1, 2)          # (B, 3, H, W)
+
+    # Convert to float32
+    colour_grid = colour_grid.to(torch.float32) / 255.0
+    cam_grid = cam_grid.to(torch.float32)
 
     return cam_grid, colour_grid, seg_grid

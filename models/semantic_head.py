@@ -1,4 +1,5 @@
 import torch.nn as nn
+import torch.nn.functional as F
 
 class SemanticHead(nn.Module):
     def __init__(self, in_channels, num_classes):
@@ -8,8 +9,8 @@ class SemanticHead(nn.Module):
             nn.BatchNorm2d(in_channels // 2),
             nn.ReLU(inplace=True),
             nn.Conv2d(in_channels // 2, num_classes, kernel_size=1)
-        
         )
 
-    def forward(self, x):
+    def forward(self, x, grid_shape):
+        x = F.interpolate(x, size=grid_shape, mode='bilinear', align_corners=False)
         return self.head(x)  # [B, num_classes, H, W]
