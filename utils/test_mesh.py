@@ -76,17 +76,21 @@ def project_to_image(grid, centre, focal, k, Hoc):
     x, y, z = cam_points[..., 0], cam_points[..., 1], cam_points[..., 2]
 
     # Convert to numpy for further processing
-    x = x.numpy()
-    y = y.numpy()
-    z = z.numpy()
+    # x = x.numpy()
+    # y = y.numpy()
+    # z = z.numpy()
 
-    theta = np.arctan2(np.sqrt(x**2 + y**2), z)
+    theta = torch.atan2(torch.sqrt(x ** 2 + y ** 2), z)
 
-    r = focal * theta * (1 + k[0]*theta**2 + k[1]*theta**4)
-    phi = np.arctan2(y, x)
+    r = focal * theta * (1 + k[0] * theta**2 + k[1] * theta**4)
+    phi = torch.atan2(y, x)
 
-    u = r * np.cos(phi) + centre[0]
-    v = r * np.sin(phi) + centre[1]
+    u = r * torch.cos(phi) + centre[0]
+    v = r * torch.sin(phi) + centre[1]
+
+    # Convert to numpy for further processing
+    u = u.numpy()
+    v = v.numpy()
 
     return np.stack([u, v], axis=-1), cam_points.numpy()
 
