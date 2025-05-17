@@ -5,12 +5,22 @@ from utils.class_weights import calculate_class_weights
 from utils.metrics import MetricsTracker
 from utils.mesh import create_mesh
 from setup import get_args
+from utils.visualisation import write_plots, write_images
 
 import time
 import torch
 import torch.nn as nn
 import torch.optim as optim
 from torch.utils.data import DataLoader
+import numpy as np
+
+# Convert to RGB with a color map
+def colourise(mask, palette):
+    h, w = mask.shape
+    color = torch.zeros(3, h, w, dtype=torch.uint8)
+    for cls, rgb in enumerate(palette):
+        color[:, mask == cls] = torch.tensor(rgb, dtype=torch.uint8).view(3, 1)
+    return color
 
 args = get_args()
 
@@ -45,8 +55,6 @@ for epoch in range(args.num_epochs):
     backbone.train()
     semantic_head.train()
     
-    running_loss = 0.0
-    metrics_tracker.reset()  # Reset metrics at the start of each epoch
     for i, (images, masks, lens) in enumerate(train_loader):
         start = time.time()
         optimizer.zero_grad()
@@ -66,12 +74,20 @@ for epoch in range(args.num_epochs):
 
         # Compute loss
         loss = criterion(outputs, seg_grid)
-        loss.backward()
+
+        try:
+            loss.backward()
+        except Exception as e:
+            print(f"Error during backward pass: {e}")
+            continue
         optimizer.step()
         
-        running_loss += loss.item()
-
+    backbone.eval()
+    semantic_head.eval()
+    running_loss = 0.0
+    metrics_tracker.reset()  # Reset metrics at the start of each epoch
     for i, (images, masks, lens) in enumerate(val_loader):
+
         images = images.to(args.device)
         masks = masks.to(args.device)
 
@@ -96,6 +112,33 @@ for epoch in range(args.num_epochs):
     # Compute metrics
     metrics = metrics_tracker.compute()
 
+    # Write plots and images to TensorBoard
+    write_plots(epoch, running_loss/len(train_loader), metrics['precision'], metrics['recall'])
+    
+    # Get ten images from the val loader
+    for i in range(1):
+        with torch.no_grad():
+            # Get a batch of images and masks
+            images, masks, lens = next(iter(val_loader))
+            images = images.to(args.device)
+            masks = masks.to(args.device)
+            lens = lens.to(args.device)
+            cam_grid, colour_grid, seg_grid = create_mesh(images, masks, lens)
+            grid_shape = colour_grid.shape[2:]
+            features = backbone(colour_grid)
+            outputs = semantic_head(features, grid_shape)
+
+            # Single batch, flatten the batch dimension
+            outputs = outputs.view(len(args.classes), outputs.shape[2], outputs.shape[3])
+            colour_grid = colour_grid.view(3, colour_grid.shape[2], colour_grid.shape[3])
+            images = images.view(3, images.shape[2], images.shape[3])
+
+            # Convert outputs to colours
+            outputs = colourise(outputs.argmax(dim=0).cpu().numpy(), args.classes)
+
+            write_images(epoch, colour_grid, outputs, images, i)
+
     # Print metrics
     print(f"Epoch [{epoch+1}/{args.num_epochs}], Loss: {running_loss/len(train_loader):.4f}, "
           f"Precision: {metrics['precision']}, Recall: {metrics['recall']}")
+    
