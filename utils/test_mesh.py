@@ -59,30 +59,27 @@ def project_to_image(grid, centre, focal, k, Hoc):
     Hco = torch.linalg.inv(Hoc)
 
     R = Hco[:3, :3]
-    t = torch.zeros(3)
-    t[2] = -Hoc[2, 3]  # Only Z translation
+    t = torch.tensor([0, 0, -Hoc[2, 3]], dtype=torch.float32)  # Translation vector
 
-    # t = t.numpy()
-    # R = R.numpy()
-
-    # print("R_numpy", R_numpy)
-    # print("R torch", R)
-    # print("t_numpy", t_numpy)
-    # print("t torch", t)
-
+    # Transform grid points to camera coordinates
     cam_points = (R @ grid.T + t.reshape(3, 1)).T
 
-    cam_points = cam_points.numpy()
-
-    # Convert to OpenCV's camera coordinate system
-    R_robot_to_camera = np.array([
+    # Camera to image
+    R_robot_to_camera = torch.tensor([
         [0, -1, 0],
         [0,  0, -1],
         [1,  0, 0],
-    ])
+    ], dtype=torch.float32)
     cam_points = (R_robot_to_camera @ cam_points.T).T
 
-    x, y, z = cam_points[:, 0], cam_points[:, 1], cam_points[:, 2]
+    # Calculate pixel coordinates
+    x, y, z = cam_points[..., 0], cam_points[..., 1], cam_points[..., 2]
+
+    # Convert to numpy for further processing
+    x = x.numpy()
+    y = y.numpy()
+    z = z.numpy()
+
     theta = np.arctan2(np.sqrt(x**2 + y**2), z)
 
     r = focal * theta * (1 + k[0]*theta**2 + k[1]*theta**4)
@@ -91,7 +88,7 @@ def project_to_image(grid, centre, focal, k, Hoc):
     u = r * np.cos(phi) + centre[0]
     v = r * np.sin(phi) + centre[1]
 
-    return np.stack([u, v], axis=-1), cam_points
+    return np.stack([u, v], axis=-1), cam_points.numpy()
 
 def create_mesh(image, mask, lens):
     # image = cv2.imread(image)
