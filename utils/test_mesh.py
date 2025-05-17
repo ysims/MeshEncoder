@@ -59,27 +59,20 @@ def project_to_image(grid, centre, focal, k, Hoc):
     Hco = torch.linalg.inv(Hoc)
 
     R = Hco[:3, :3]
-    # t = np.array([0.0, 0.0, -Hoc[2, 3]])
     t = torch.zeros(3)
     t[2] = -Hoc[2, 3]  # Only Z translation
+
     # t = t.numpy()
     # R = R.numpy()
-
-    Hco_numpy = np.linalg.inv(Hoc)
-    R_numpy = Hco_numpy[:3, :3]
-    t_numpy = np.zeros(3)
-    t_numpy[2] = -Hoc[2, 3]  # Only Z translation
-
-    t = t.numpy()
-    R = R.numpy()
 
     # print("R_numpy", R_numpy)
     # print("R torch", R)
     # print("t_numpy", t_numpy)
     # print("t torch", t)
-    
 
     cam_points = (R @ grid.T + t.reshape(3, 1)).T
+
+    cam_points = cam_points.numpy()
 
     # Convert to OpenCV's camera coordinate system
     R_robot_to_camera = np.array([
@@ -125,30 +118,40 @@ def create_mesh(image, mask, lens):
     k = lens[3:5]
     Hoc = lens[5:].view(4, 4)
 
-    # Define world grid (XY plane at Z=0)
+    # Create a ground plane grid
     height = 6
     width = 9
     spacing = 0.03
-    xs = np.linspace(0, 6, int(height / spacing))
-    ys = np.linspace(-width / 2, width / 2, int(width / spacing))
-    # xs = np.arange(x_range[0], x_range[1], spacing)
-    # ys = np.arange(y_range[0], y_range[1], spacing)
-    grid = np.array([[x, y, 0] for y in ys for x in xs])
+    xs = torch.linspace(0, 6, int(height / spacing))
+    ys = torch.linspace(-width / 2, width / 2, int(width / spacing))
+    ys, xs = torch.meshgrid(ys, xs, indexing='ij')  # Match NumPy's iteration order
+    grid = torch.stack([xs, ys, torch.zeros_like(xs)], dim=-1).reshape(-1, 3)  # [N, 3]
 
+    # The height and width of the grid in pixels
+    grid_width = int(6 / spacing)  # Number of points along the x-axis
+    grid_height = int(9 / spacing)  # Number of points along the y-axis
+
+    # Get the pixels corresponding to the grid points
+    # and the grid points in camera coordinates
     pixels, cam_points = project_to_image(grid, centre, focal_length, k, Hoc)
 
+    # Blank out pixels outside the image
     in_front = cam_points[:, 2] > 0
     valid = in_front & valid_pixels(pixels, image.shape)
 
     pixels_valid = pixels[valid]
     cam_points_valid = cam_points[valid]
     valid_indices = np.where(valid)[0]
-    i_y, i_x = np.divmod(valid_indices, len(xs))
 
-    colour_grid = np.zeros((len(ys), len(xs), 3), dtype=np.uint8)
-    cam_grid = np.zeros((len(ys), len(xs), 3), dtype=np.float32)
-    seg_grid = np.zeros((len(ys), len(xs), 3), dtype=np.uint8)
+    # Convert pixel coordinates to grid indices
+    i_y, i_x = np.divmod(valid_indices, grid_width)
+    
+    # Create grids for the sampled image, camera points, and sampled seg mask
+    colour_grid = np.zeros((grid_height, grid_width, 3), dtype=np.uint8)
+    cam_grid = np.zeros((grid_height, grid_width, 3), dtype=np.float32)
+    seg_grid = np.zeros((grid_height, grid_width, 3), dtype=np.uint8)
 
+    # Fill the grids with the sampled values
     for idx, (u, v) in enumerate(pixels_valid.astype(int)):
         colour_grid[i_y[idx], i_x[idx]] = image[v, u]
         seg_grid[i_y[idx], i_x[idx]] = mask[v, u]
