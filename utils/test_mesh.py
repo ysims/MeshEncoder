@@ -75,24 +75,15 @@ def project_to_image(grid, centre, focal, k, Hoc):
     # Calculate pixel coordinates
     x, y, z = cam_points[..., 0], cam_points[..., 1], cam_points[..., 2]
 
-    # Convert to numpy for further processing
-    # x = x.numpy()
-    # y = y.numpy()
-    # z = z.numpy()
-
+    # Projection model
     theta = torch.atan2(torch.sqrt(x ** 2 + y ** 2), z)
-
     r = focal * theta * (1 + k[0] * theta**2 + k[1] * theta**4)
+    # Calculate pixel coordinates
     phi = torch.atan2(y, x)
-
     u = r * torch.cos(phi) + centre[0]
     v = r * torch.sin(phi) + centre[1]
 
-    # Convert to numpy for further processing
-    u = u.numpy()
-    v = v.numpy()
-
-    return np.stack([u, v], axis=-1), cam_points.numpy()
+    return torch.stack([u, v], axis=-1), cam_points
 
 def create_mesh(image, mask, lens):
     # image = cv2.imread(image)
@@ -102,7 +93,7 @@ def create_mesh(image, mask, lens):
     # Cut out 4th channel of mask
     mask = mask[:, :, 0:3]
 
-    height, width = image.shape[:2]
+    img_height, img_width = image.shape[:2]
 
     classes = [
         (0, 0, 0), # black background
@@ -114,7 +105,7 @@ def create_mesh(image, mask, lens):
     ]
 
     centre = lens[:2]
-    centre = np.array([centre[0] + width / 2, centre[1] + height / 2])
+    centre = np.array([centre[0] + img_width / 2, centre[1] + img_height / 2])
     focal_length = lens[2]
     k = lens[3:5]
     Hoc = lens[5:].view(4, 4)
@@ -135,15 +126,20 @@ def create_mesh(image, mask, lens):
     # Get the pixels corresponding to the grid points
     # and the grid points in camera coordinates
     pixels, cam_points = project_to_image(grid, centre, focal_length, k, Hoc)
-
-    # Blank out pixels outside the image
-    in_front = cam_points[:, 2] > 0
-    valid = in_front & valid_pixels(pixels, image.shape)
-
-    pixels_valid = pixels[valid]
-    cam_points_valid = cam_points[valid]
+    
+    # Remove points outside the image
+    u = torch.round(pixels[..., 0]).long()
+    v = torch.round(pixels[..., 1]).long()
+    valid = (u >= 0) & (u < img_width) & (v >= 0) & (v < img_height)
+    
+    # Keep only valid pixels and cam points
+    pixels = pixels[valid]
+    cam_points = cam_points[valid]
     valid_indices = np.where(valid)[0]
 
+    pixels = pixels.numpy()
+    cam_points = cam_points.numpy()
+    
     # Convert pixel coordinates to grid indices
     i_y, i_x = np.divmod(valid_indices, grid_width)
     
@@ -153,10 +149,10 @@ def create_mesh(image, mask, lens):
     seg_grid = np.zeros((grid_height, grid_width, 3), dtype=np.uint8)
 
     # Fill the grids with the sampled values
-    for idx, (u, v) in enumerate(pixels_valid.astype(int)):
+    for idx, (u, v) in enumerate(pixels.astype(int)):
         colour_grid[i_y[idx], i_x[idx]] = image[v, u]
         seg_grid[i_y[idx], i_x[idx]] = mask[v, u]
-        cam_grid[i_y[idx], i_x[idx]] = cam_points_valid[idx]
+        cam_grid[i_y[idx], i_x[idx]] = cam_points[idx]
 
     # Transpose to match expected orientation (X horizontal, Y vertical)
     colour_grid = colour_grid.transpose(1, 0, 2)
