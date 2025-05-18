@@ -61,9 +61,8 @@ def project_to_image(grid, centre, focal, k, Hoc):
     Hco = torch.linalg.inv(Hoc)  # [B, 4, 4]
 
     R = Hco[:, :3, :3]  # [B, 3, 3]
-    z = Hoc[:, 2, 3]  # [B]
     t = torch.zeros((B, 3, 1))  # [B, 3, 1]
-    t[:, 2, 0] = -z
+    t[:, 2, 0] = -Hoc[:, 2, 3]
 
     # Transform grid points to camera coordinates
     grid = grid.transpose(1, 2)  # [B, 3, N]
@@ -119,10 +118,7 @@ def create_mesh(image, mask, lens):
     image = image.permute(0, 2, 3, 1)  # [B, H, W, C]
     mask = mask.permute(0, 2, 3, 1)  # [B, H, W, C]
 
-
     B, img_height, img_width, _ = image.shape
-    # image = image.squeeze(0)
-    # mask = mask.squeeze(0)
 
     centre = lens[:2]
     centre = np.array([centre[0] + img_width / 2, centre[1] + img_height / 2])
@@ -168,13 +164,10 @@ def create_mesh(image, mask, lens):
     valid_indices = torch.nonzero(valid, as_tuple=False)
     b_indices = valid_indices[:, 0]
     flat_indices = valid_indices[:, 1]
-    # pixels = pixels[valid]
-    # cam_points = cam_points[valid]
     
     # Convert pixel coordinates to grid indices
     i_x = flat_indices % grid_width
     i_y = torch.div(flat_indices, grid_width, rounding_mode='floor')
-
 
     # Extract u and v coordinates from pixels
     u_valid = u[b_indices, flat_indices]
