@@ -4,20 +4,10 @@ import yaml
 from matplotlib import pyplot as plt
 import torch 
 from PIL import Image
+import torchvision.transforms as T
 
-def load_lens_params_yaml(lens):
-    with open(lens, 'r') as f:
-        lens = yaml.safe_load(f)
 
-    return {
-        'Hoc': np.array(lens['Hoc']),
-        'centre': np.array(lens['centre']),
-        'focal_length': lens['focal_length'],
-        'k': lens['k'],
-        'projection': lens['projection']
-    }
-
-def load_lens_params_torch(path):
+def load_lens_params(path):
     with open(path, 'r') as f:
         params = yaml.safe_load(f)
     # Convert the lens parameters into a tensor
@@ -26,14 +16,6 @@ def load_lens_params_torch(path):
     k = torch.tensor(params['k'], dtype=torch.float32)
     Hoc = torch.tensor(params['Hoc'], dtype=torch.float32)
     return torch.cat([centre, focal_length, k, Hoc.flatten()])
-
-
-def valid_pixels(pixels, image_shape):
-    h, w = image_shape[:2]
-    return (
-        (pixels[:, 0] >= 0) & (pixels[:, 0] < w) &
-        (pixels[:, 1] >= 0) & (pixels[:, 1] < h)
-    )
 
 def mask_to_class_indices(mask: torch.Tensor, classes: list[tuple[int, int, int]]) -> torch.Tensor:
     """
@@ -83,15 +65,44 @@ def project_to_image(grid, centre, focal, k, Hoc):
     u = r * torch.cos(phi) + centre[0]
     v = r * torch.sin(phi) + centre[1]
 
-    return torch.stack([u, v], axis=-1), cam_points
+    return torch.stack([u, v], axis=-1).long(), cam_points
 
 def create_mesh(image, mask, lens):
+
+    image_transform = T.Compose([
+        T.ToTensor(),
+        T.Normalize(mean=[0.485, 0.456, 0.406],  # Standard ImageNet
+                    std=[0.229, 0.224, 0.225]),
+    ])
+
+    mask_transform = T.Compose([
+        T.PILToTensor(),
+        T.Lambda(lambda x: x[:3, :, :]),
+    ])
+    # image_np = np.array(image)
+    # mask_np = np.array(mask)
+    # image_np = torch.from_numpy(image_np).to(torch.uint8)
+    # mask_np = torch.from_numpy(mask_np).to(torch.uint8)
+    # print(image_np.shape)
+    # print(mask_np.shape)
+
     # image = cv2.imread(image)
     # mask = cv2.imread(mask)
+    # image = image_transform(image).long()
+    # mask = mask_transform(mask).long()
+    # print(image.shape)
+    # print(mask.shape)
+
     image = np.array(image)
     mask = np.array(mask)
+    image = torch.from_numpy(image).to(torch.uint8)
+    mask = torch.from_numpy(mask).to(torch.uint8)
     # Cut out 4th channel of mask
     mask = mask[:, :, 0:3]
+
+    # Switch around axes
+    # image = image.permute(1, 2, 0)  # [H, W, C]
+    # mask = mask.permute(1, 2, 0)  # [H, W, C]
 
     img_height, img_width = image.shape[:2]
 
@@ -135,24 +146,28 @@ def create_mesh(image, mask, lens):
     # Keep only valid pixels and cam points
     pixels = pixels[valid]
     cam_points = cam_points[valid]
-    valid_indices = np.where(valid)[0]
-
-    pixels = pixels.numpy()
-    cam_points = cam_points.numpy()
+    valid_indices = torch.nonzero(valid).squeeze()
     
     # Convert pixel coordinates to grid indices
-    i_y, i_x = np.divmod(valid_indices, grid_width)
-    
-    # Create grids for the sampled image, camera points, and sampled seg mask
-    colour_grid = np.zeros((grid_height, grid_width, 3), dtype=np.uint8)
-    cam_grid = np.zeros((grid_height, grid_width, 3), dtype=np.float32)
-    seg_grid = np.zeros((grid_height, grid_width, 3), dtype=np.uint8)
+    i_x = valid_indices % grid_width
+    i_y = torch.div(valid_indices, grid_width, rounding_mode='floor')
 
-    # Fill the grids with the sampled values
-    for idx, (u, v) in enumerate(pixels.astype(int)):
-        colour_grid[i_y[idx], i_x[idx]] = image[v, u]
-        seg_grid[i_y[idx], i_x[idx]] = mask[v, u]
-        cam_grid[i_y[idx], i_x[idx]] = cam_points[idx]
+    # Create grids for the sampled image, camera points, and sampled seg mask
+    colour_grid = torch.zeros((grid_height, grid_width, 3), dtype=torch.uint8)
+    cam_grid = torch.zeros((grid_height, grid_width, 3), dtype=torch.float32)
+    seg_grid = torch.zeros((grid_height, grid_width, 3), dtype=torch.uint8)
+
+    # Extract u and v coordinates from pixels
+    u, v = pixels[:, 0], pixels[:, 1]
+
+    # Use advanced indexing to fill the grids
+    colour_grid[i_y, i_x] = image[v, u]
+    seg_grid[i_y, i_x] = mask[v, u]
+    cam_grid[i_y, i_x] = cam_points
+
+    colour_grid = colour_grid.numpy()
+    cam_grid = cam_grid.numpy()
+    seg_grid = seg_grid.numpy()
 
     # Transpose to match expected orientation (X horizontal, Y vertical)
     colour_grid = colour_grid.transpose(1, 0, 2)
@@ -178,6 +193,5 @@ def create_mesh(image, mask, lens):
 if __name__ == "__main__":
     image = Image.open("test/image.jpg")
     mask = Image.open("test/mask.png")
-    lens_yaml = load_lens_params_yaml("test/lens.yaml")
-    lens = load_lens_params_torch("test/lens.yaml")
+    lens = load_lens_params("test/lens.yaml")
     create_mesh(image, mask, lens)
