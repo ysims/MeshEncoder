@@ -6,6 +6,14 @@ import torch
 from PIL import Image
 import torchvision.transforms as T
 
+classes = [
+    (0, 0, 0), # black background
+    (255, 0, 0), # red ball
+    (0, 255, 255), # yellow goal
+    (0, 0, 255), # blue robot
+    (0, 255, 0), # green field
+    (255, 255, 255), # white line
+]
 
 def load_lens_params(path):
     with open(path, 'r') as f:
@@ -79,45 +87,15 @@ def create_mesh(image, mask, lens):
         T.PILToTensor(),
         T.Lambda(lambda x: x[:3, :, :]),
     ])
-    image_np = np.array(image)
-    mask_np = np.array(mask)
-    image_np = torch.from_numpy(image_np).to(torch.uint8)
-    mask_np = torch.from_numpy(mask_np).to(torch.uint8)
-    print(image_np.shape)
-    print(mask_np.shape)
-    print(image_np.dtype)
-    print(mask_np.dtype)
 
-    # image = cv2.imread(image)
-    # mask = cv2.imread(mask)
     image = image_transform(image).to(torch.float32)
     mask = mask_transform(mask).to(torch.uint8)
-    print(image.shape)
-    print(mask.shape)
-    print(image.dtype)
-    print(mask.dtype)
-
-    # image = np.array(image)
-    # mask = np.array(mask)
-    # image = torch.from_numpy(image).to(torch.uint8)
-    # mask = torch.from_numpy(mask).to(torch.uint8)
-    # # Cut out 4th channel of mask
-    # mask = mask[:, :, 0:3]
-
+    
     # Switch around axes
     image = image.permute(1, 2, 0)  # [H, W, C]
     mask = mask.permute(1, 2, 0)  # [H, W, C]
 
     img_height, img_width = image.shape[:2]
-
-    classes = [
-        (0, 0, 0), # black background
-        (255, 0, 0), # red ball
-        (0, 255, 255), # yellow goal
-        (0, 0, 255), # blue robot
-        (0, 255, 0), # green field
-        (255, 255, 255), # white line
-    ]
 
     centre = lens[:2]
     centre = np.array([centre[0] + img_width / 2, centre[1] + img_height / 2])
@@ -169,36 +147,37 @@ def create_mesh(image, mask, lens):
     seg_grid[i_y, i_x] = mask[v, u]
     cam_grid[i_y, i_x] = cam_points
 
-    colour_grid = colour_grid.numpy()
-    cam_grid = cam_grid.numpy()
-    seg_grid = seg_grid.numpy()
-
     # Unnormalize the colour grid with ImageNet mean and std
+    colour_grid_np = colour_grid.numpy()
     mean = np.array([0.485, 0.456, 0.406])
     std = np.array([0.229, 0.224, 0.225])
-    colour_grid = (colour_grid * std + mean) * 255
-    colour_grid = np.clip(colour_grid, 0, 255).astype(np.uint8)
-    
+    colour_grid_np = (colour_grid_np * std + mean) * 255
+    colour_grid_np = np.clip(colour_grid_np, 0, 255).astype(np.uint8)
+
     
 
     # Transpose to match expected orientation (X horizontal, Y vertical)
-    colour_grid = colour_grid.transpose(1, 0, 2)
-    cam_grid = cam_grid.transpose(1, 0, 2)
-    seg_grid = seg_grid.transpose(1, 0, 2)
-    colour_grid_flipped = np.flipud(colour_grid)
-    seg_grid_flipped = np.flipud(seg_grid)
+    colour_grid_np = colour_grid_np.transpose(1, 0, 2)
+    seg_grid_np = seg_grid.numpy().transpose(1, 0, 2)
+    colour_grid_np = np.flipud(colour_grid_np)
+    seg_grid_np = np.flipud(seg_grid_np)
 
     # Visualize the results
     plt.figure(figsize=(12, 6))
     plt.subplot(1, 3, 1)
-    plt.imshow(colour_grid_flipped)
+    plt.imshow(colour_grid_np)
     plt.title("Colour Grid")
     plt.axis('off')
     plt.subplot(1, 3, 2)
-    plt.imshow(seg_grid_flipped, cmap='gray')
+    plt.imshow(seg_grid_np, cmap='gray')
     plt.title("Segmentation Grid")
     plt.axis('off')
     plt.show()
+
+    # Grids need to be converted to expected H, W, C format
+    cam_grid = cam_grid.permute(1, 0, 2)
+    colour_grid = colour_grid.permute(1, 0, 2)
+    seg_grid = seg_grid.permute(1, 0, 2)
 
     return colour_grid, cam_grid
 
