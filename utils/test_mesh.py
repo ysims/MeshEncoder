@@ -79,30 +79,34 @@ def create_mesh(image, mask, lens):
         T.PILToTensor(),
         T.Lambda(lambda x: x[:3, :, :]),
     ])
-    # image_np = np.array(image)
-    # mask_np = np.array(mask)
-    # image_np = torch.from_numpy(image_np).to(torch.uint8)
-    # mask_np = torch.from_numpy(mask_np).to(torch.uint8)
-    # print(image_np.shape)
-    # print(mask_np.shape)
+    image_np = np.array(image)
+    mask_np = np.array(mask)
+    image_np = torch.from_numpy(image_np).to(torch.uint8)
+    mask_np = torch.from_numpy(mask_np).to(torch.uint8)
+    print(image_np.shape)
+    print(mask_np.shape)
+    print(image_np.dtype)
+    print(mask_np.dtype)
 
     # image = cv2.imread(image)
     # mask = cv2.imread(mask)
-    # image = image_transform(image).long()
-    # mask = mask_transform(mask).long()
-    # print(image.shape)
-    # print(mask.shape)
+    image = image_transform(image).to(torch.float32)
+    mask = mask_transform(mask).to(torch.uint8)
+    print(image.shape)
+    print(mask.shape)
+    print(image.dtype)
+    print(mask.dtype)
 
-    image = np.array(image)
-    mask = np.array(mask)
-    image = torch.from_numpy(image).to(torch.uint8)
-    mask = torch.from_numpy(mask).to(torch.uint8)
-    # Cut out 4th channel of mask
-    mask = mask[:, :, 0:3]
+    # image = np.array(image)
+    # mask = np.array(mask)
+    # image = torch.from_numpy(image).to(torch.uint8)
+    # mask = torch.from_numpy(mask).to(torch.uint8)
+    # # Cut out 4th channel of mask
+    # mask = mask[:, :, 0:3]
 
     # Switch around axes
-    # image = image.permute(1, 2, 0)  # [H, W, C]
-    # mask = mask.permute(1, 2, 0)  # [H, W, C]
+    image = image.permute(1, 2, 0)  # [H, W, C]
+    mask = mask.permute(1, 2, 0)  # [H, W, C]
 
     img_height, img_width = image.shape[:2]
 
@@ -153,7 +157,7 @@ def create_mesh(image, mask, lens):
     i_y = torch.div(valid_indices, grid_width, rounding_mode='floor')
 
     # Create grids for the sampled image, camera points, and sampled seg mask
-    colour_grid = torch.zeros((grid_height, grid_width, 3), dtype=torch.uint8)
+    colour_grid = torch.zeros((grid_height, grid_width, 3), dtype=torch.float32)
     cam_grid = torch.zeros((grid_height, grid_width, 3), dtype=torch.float32)
     seg_grid = torch.zeros((grid_height, grid_width, 3), dtype=torch.uint8)
 
@@ -168,6 +172,14 @@ def create_mesh(image, mask, lens):
     colour_grid = colour_grid.numpy()
     cam_grid = cam_grid.numpy()
     seg_grid = seg_grid.numpy()
+
+    # Unnormalize the colour grid with ImageNet mean and std
+    mean = np.array([0.485, 0.456, 0.406])
+    std = np.array([0.229, 0.224, 0.225])
+    colour_grid = (colour_grid * std + mean) * 255
+    colour_grid = np.clip(colour_grid, 0, 255).astype(np.uint8)
+    
+    
 
     # Transpose to match expected orientation (X horizontal, Y vertical)
     colour_grid = colour_grid.transpose(1, 0, 2)
