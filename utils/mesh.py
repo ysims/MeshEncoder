@@ -1,54 +1,60 @@
 import torch
 
-def project_to_image(points_3d, centres, focal_lengths, k_params, Hoc, device):
+def project_to_image(grid, centre, focal, k, Hoc, device):
     """
-    Project 3D world points to 2D image pixels using fisheye EQUIDISTANT model.
+    Project batched 3D world points to 2D image pixels using a fisheye equidistant model.
     
     Args:
-        points_3d: (B, N, 3) tensor of 3D points in world coordinates
-        centres: (B, 2) tensor of principal points (cx, cy)
-        focal_lengths: (B,) tensor of focal lengths
-        k_params: (B, 2) tensor of distortion parameters (k1, k2)
-        Hoc: (B, 4, 4) tensor of camera-to-world transforms
+        grid: [B, N, 3] tensor of 3D world points
+        centre: [2] tensor with (cx, cy)
+        focal: scalar focal length
+        k: [2] distortion coefficients
+        Hoc: [B, 4, 4] transformation from object to camera
     
     Returns:
-        pixels: (B, N, 2) tensor of projected 2D image coordinates
-        cam_points: (B, N, 3) tensor of points in camera coordinates
+        pixels: [B, N, 2] pixel coordinates
+        cam_points: [B, N, 3] camera-space 3D points
     """
-    B, N, _ = points_3d.shape
+    B, N, _ = grid.shape
+    Hco = torch.linalg.inv(Hoc)  # [B, 4, 4]
 
-    # Invert each Hoc to get Hco
-    Hco = torch.linalg.inv(Hoc).to(device)  # (B, 4, 4)
-    R = Hco[:, :3, :3].to(device)           # (B, 3, 3)
-    t = -Hco[:, :3, 3].to(device)           # (B, 3)
+    R = Hco[:, :3, :3].to(device)  # [B, 3, 3]
+    t = torch.zeros((B, 3, 1)).to(device)  # [B, 3, 1]
+    t[:, 2, 0] = -Hoc[:, 2, 3]
 
-    # Transform points: X_cam = R @ X_world + t
-    cam_points = torch.bmm(points_3d, R.transpose(1, 2)) + t.unsqueeze(1)  # (B, N, 3)
+    # Transform grid points to camera coordinates
+    grid = grid.transpose(1, 2)  # [B, 3, N]
+    cam_points = torch.bmm(R, grid) + t  # [B, 3, N]
+    cam_points = cam_points.transpose(1, 2)  # [B, N, 3]
 
+    # Apply robot-to-camera rotation
+    R_robot_to_camera = torch.tensor([
+        [0, -1, 0],
+        [0,  0, -1],
+        [1,  0, 0],
+    ], dtype=torch.float32).expand(B, -1, -1).to(device)  # [B, 3, 3]
+
+    cam_points = torch.bmm(R_robot_to_camera, cam_points.transpose(1, 2)).transpose(1, 2)  # [B, N, 3]
+
+    # Project to image plane
     x, y, z = cam_points[..., 0], cam_points[..., 1], cam_points[..., 2]
-    theta = torch.atan2(torch.sqrt(x ** 2 + y ** 2), z).to(device)  # (B, N)
+    theta = torch.atan2(torch.sqrt(x**2 + y**2), z)
+    
+    focal = focal.expand_as(theta)  # [B, N]
+    k = k.unsqueeze(1).expand(-1, theta.shape[1], -1)  # [B, N, 2]
 
-    k1 = k_params[:, 0].unsqueeze(1)  # (B, 1)
-    k2 = k_params[:, 1].unsqueeze(1)  # (B, 1)
-    f = focal_lengths.unsqueeze(1)    # (B, 1)
+    r = focal * theta * (1 + k[..., 0] * theta**2 + k[..., 1] * theta**4)  # [B, N]
+    phi = torch.atan2(y, x)  # [B, N]
+    u = r * torch.cos(phi) + centre[..., 0].unsqueeze(1)  # [B, N]
+    v = r * torch.sin(phi) + centre[..., 1].unsqueeze(1)  # [B, N]
 
-    r = f * theta * (1 + k1 * theta**2 + k2 * theta**4).to(device)  # (B, N)
+    pixels = torch.stack([u, v], dim=-1)  # [B, N, 2]
 
-    phi = torch.atan2(y, x)  # (B, N)
-    cx = centres[:, 0].unsqueeze(1)  # (B, 1)
-    cy = centres[:, 1].unsqueeze(1)  # (B, 1)
-
-    u = r * torch.cos(phi) + cx
-    v = r * torch.sin(phi) + cy
-
-    pixels = torch.stack([u, v], dim=-1)  # (B, N, 2)
-
-    return pixels, cam_points
-
+    return pixels.long(), cam_points  # [B, N, 2], [B, N, 3]
     
 def create_mesh(images, masks, lens):
     """
-    Create a mesh using batched image and mask tensors.
+    Create a mesh using batched images and masks tensors.
 
     Args:
         images (torch.Tensor): (B, C, H, W) in [0, 1] range.
@@ -58,83 +64,73 @@ def create_mesh(images, masks, lens):
     Returns:
         dict: Dictionary with cam_grid, colour_grid, seg_grid.
     """
-    batch_size, _, height, width = images.shape
+    
+    # Switch around axes
+    images = images.permute(0, 2, 3, 1)  # [B, H, W, C]
+    masks = masks.permute(0, 1, 2)  # [B, H, W]
 
+    B, img_height, img_width, _ = images.shape
     device = images.device
 
-    # Extract lens parameters
-    centres = lens[:, :2].to(device)
-    focal_lengths = lens[:, 2].to(device)
-    k_params = lens[:, 3:5].to(device)
-    Hoc = lens[:, 5:].view(batch_size, 4, 4).to(device)
+    centre = lens[:,:2]
+    centre = torch.tensor(centre, dtype=torch.float32).to(device)
+    centre = (centre - 0.5) * torch.tensor([img_width, img_height], dtype=torch.float32).to(device)
 
-    # Shift centres
-    centres[:, 0] += width / 2
-    centres[:, 1] += height / 2
+    focal_length = lens[:,2].to(device)
+    k = lens[:,3:5].to(device)
+    Hoc = lens[:,5:].view(B, 4, 4).to(device)
 
-    # World grid
-    x_range = torch.linspace(0, 6, int(6 / 0.03), dtype=torch.float32, device=device)
-    y_range = torch.linspace(-4.5, 4.5, int(9 / 0.03), dtype=torch.float32, device=device)
-    X, Y = torch.meshgrid(x_range, y_range, indexing='ij')
-    H, W = X.shape
-    Z = torch.zeros_like(X)
-    world_grid = torch.stack([X, Y, Z], dim=-1).reshape(-1, 3)  # (H*W, 3)
-    world_grid = world_grid.unsqueeze(0).repeat(batch_size, 1, 1)  # (B, H*W, 3)
+    # Create a ground plane grid
+    height = 6
+    width = 9
+    spacing = 0.03
+    xs = torch.linspace(0, 6, int(height / spacing))
+    ys = torch.linspace(-width / 2, width / 2, int(width / spacing))
+    ys, xs = torch.meshgrid(ys, xs, indexing='ij')
+    grid = torch.stack([xs, ys, torch.zeros_like(xs)], dim=-1).reshape(-1, 3)  # [N, 3]
+    grid = grid.to(device)  # Move to the same device as images
 
-    # Project
-    pixels, cam_points = project_to_image(world_grid, centres, focal_lengths, k_params, Hoc, device)  # (B, H*W, 2), (B, H*W, 3)
+    # The height and width of the grid in pixels
+    grid_width = int(6 / spacing)  # Number of points along the x-axis
+    grid_height = int(9 / spacing)  # Number of points along the y-axis
 
+    # Unsqueeze to add batch dimension
+    grid = grid.unsqueeze(0).expand(B, -1, -1)  # [1, N, 3]
+
+    # Get the pixels corresponding to the grid points
+    # and the grid points in camera coordinates
+    pixels, cam_points = project_to_image(grid, centre, focal_length, k, Hoc, device)
+    
+    # Remove points outside the images
     u = torch.round(pixels[..., 0]).long()
     v = torch.round(pixels[..., 1]).long()
-    valid = (u >= 0) & (u < width) & (v >= 0) & (v < height)
+    valid = (u >= 0) & (u < img_width) & (v >= 0) & (v < img_height)
+    
+    # Create grids for the sampled images, camera points, and sampled seg masks
+    colour_grid = torch.zeros((B, grid_height, grid_width, 3), dtype=torch.float32).to(device)
+    cam_grid = torch.zeros((B, grid_height, grid_width, 3), dtype=torch.float32).to(device)
+    seg_grid = torch.zeros((B, grid_height, grid_width), dtype=torch.long).to(device)
+    
+    # Keep only valid pixels and cam points
+    valid_indices = torch.nonzero(valid, as_tuple=False)
+    b_indices = valid_indices[:, 0]
+    flat_indices = valid_indices[:, 1]
+    
+    # Convert pixel coordinates to grid indices
+    i_x = flat_indices % grid_width
+    i_y = torch.div(flat_indices, grid_width, rounding_mode='floor')
 
-    # Create flat indices
-    flat_idx = torch.arange(batch_size, device=device).unsqueeze(1)  # (B, 1)
-    batch_idx = flat_idx.expand(-1, H * W)[valid]  # (N_valid,)
-    u_idx = u[valid]
-    v_idx = v[valid]
-    flat_valid_idx = torch.arange(H * W, device=device).expand(batch_size, -1)[valid]
+    # Extract u and v coordinates from pixels
+    u_valid = u[b_indices, flat_indices]
+    v_valid = v[b_indices, flat_indices]
+    
+    # Use advanced indexing to fill the grids
+    colour_grid[b_indices, i_y, i_x] = images[b_indices, v_valid, u_valid]
+    seg_grid[b_indices, i_y, i_x] = masks[b_indices, v_valid, u_valid]
+    cam_grid[b_indices, i_y, i_x] = cam_points[b_indices, flat_indices]
 
-    # Images: (B, C, H, W) → (B, H, W, C)
-    images_hw = (images.permute(0, 2, 3, 1) * 255).to(torch.uint8)  # (B, H, W, 3)
-    colours = images_hw[batch_idx, v_idx, u_idx]  # (N_valid, 3)
-
-    # cam_points: already (B, H*W, 3)
-    cam_values = cam_points[valid]  # (N_valid, 3)
-
-    # Masks: handle 1 or 3 channels
-    if masks.shape[1] == 1:
-        seg = masks[:, 0]  # (B, H, W)
-        seg_values = seg[batch_idx, v_idx, u_idx].unsqueeze(-1).repeat(1, 3).to(torch.uint8)  # (N_valid, 3)
-    elif masks.dim() == 3:
-        masks = masks.unsqueeze(1)  # Convert (B, H, W) -> (B, 1, H, W)
-        masks_hw = masks.permute(0, 2, 3, 1)  # (B, H, W, 3)
-        seg_values = masks_hw[batch_idx, v_idx, u_idx].to(torch.uint8)
-    else:
-        masks_hw = masks.permute(0, 2, 3, 1)  # (B, H, W, 3)
-        seg_values = masks_hw[batch_idx, v_idx, u_idx].to(torch.uint8)
-
-    # Initialize outputs
-    colour_grid = torch.zeros((batch_size, H * W, 3), dtype=torch.uint8, device=device)
-    cam_grid = torch.zeros((batch_size, H * W, 3), dtype=torch.float32, device=device)
-    seg_grid = torch.zeros((batch_size, H * W, 1), dtype=torch.uint8, device=device)
-
-    # Set valid values using index_put_
-    colour_grid.index_put_((batch_idx, flat_valid_idx), colours, accumulate=False)
-    cam_grid.index_put_((batch_idx, flat_valid_idx), cam_values, accumulate=False)
-    seg_grid.index_put_((batch_idx, flat_valid_idx), seg_values, accumulate=False)
-
-    # Reshape
-    colour_grid = colour_grid.view(batch_size, H, W, 3)
-    cam_grid = cam_grid.view(batch_size, H, W, 3)
-    seg_grid = seg_grid.view(batch_size, H, W).long()
-
-    # Permute to (B, 3, H, W)
-    colour_grid = colour_grid.permute(0, 3, 1, 2)  # (B, 3, H, W)
-    cam_grid = cam_grid.permute(0, 3, 1, 2)          # (B, 3, H, W)
-
-    # Convert to float32
-    colour_grid = colour_grid.to(torch.float32) / 255.0
-    cam_grid = cam_grid.to(torch.float32)
+    # Convert order back to [B, C, H, W]
+    colour_grid = colour_grid.permute(0, 3, 1, 2)  # [B, C, H, W]
+    cam_grid = cam_grid.permute(0, 3, 1, 2)  # [B, C, H, W]
 
     return cam_grid, colour_grid, seg_grid

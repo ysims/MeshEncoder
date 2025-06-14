@@ -11,6 +11,6 @@ class SemanticHead(nn.Module):
             nn.Conv2d(in_channels // 2, num_classes, kernel_size=1)
         )
 
-    def forward(self, x, grid_shape):
-        x = F.interpolate(x, size=grid_shape, mode='bilinear', align_corners=False)
+    def forward(self, x):
+        # x = F.interpolate(x, size=grid_shape, mode='bilinear', align_corners=False)
         return self.head(x)  # [B, num_classes, H, W]

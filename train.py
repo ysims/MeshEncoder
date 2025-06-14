@@ -34,11 +34,12 @@ train_loader = DataLoader(train_dataset, batch_size=args.batch_size, shuffle=Tru
 val_loader = DataLoader(val_dataset, batch_size=args.batch_size, shuffle=False, num_workers=args.num_workers)
 
 # Create models - the backbone and the semantic head
-backbone = FeatureBackbone(backbone=args.backbone).to(args.device)
+img_size = (1280, 1024)
+backbone = FeatureBackbone(img_size=img_size, backbone=args.backbone).to(args.device)
 semantic_head = SemanticHead(in_channels=backbone.output_size, num_classes=len(args.classes)).to(args.device) 
 
 # Optimiser
-optimizer = optim.Adam(list(backbone.parameters()) + list(semantic_head.parameters()), lr=args.learning_rate, weight_decay=args.weight_decay)
+optimiser = optim.Adam(list(backbone.parameters()) + list(semantic_head.parameters()), lr=args.learning_rate, weight_decay=args.weight_decay)
 
 # Calculate class weights
 # class_weights = calculate_class_weights(train_dataset, num_classes=len(args.classes))
@@ -57,31 +58,34 @@ for epoch in range(args.num_epochs):
     
     for i, (images, masks, lens) in enumerate(train_loader):
         start = time.time()
-        optimizer.zero_grad()
+        optimiser.zero_grad()
         
         images = images.to(args.device)
         masks = masks.to(args.device)
         
         # Sample ground plane mesh
-        cam_grid, colour_grid, seg_grid = create_mesh(images, masks, lens)
-        grid_shape = colour_grid.shape[2:]
+        # cam_grid, colour_grid, seg_grid = create_mesh(images, masks, lens)
+        # grid_shape = colour_grid.shape[2:]
 
         # Backbone
-        features = backbone(colour_grid)
+        features = backbone(images)
+        print(features.shape)
 
         # Semantic head
-        outputs = semantic_head(features, grid_shape)
+        outputs = semantic_head(features)
 
         # Compute loss
-        loss = criterion(outputs, seg_grid)
+        print(outputs.shape, masks.shape)
+        loss = criterion(outputs, masks)
 
         try:
             loss.backward()
         except Exception as e:
             print(f"Error during backward pass: {e}")
             continue
-        optimizer.step()
-        
+        optimiser.step()
+        break
+
     backbone.eval()
     semantic_head.eval()
     running_loss = 0.0
@@ -92,22 +96,22 @@ for epoch in range(args.num_epochs):
         masks = masks.to(args.device)
 
         # Sample ground plane mesh
-        cam_grid, colour_grid, seg_grid = create_mesh(images, masks, lens)
-
-        grid_shape = colour_grid.shape[2:]
+        # cam_grid, colour_grid, seg_grid = create_mesh(images, masks, lens)
+        # grid_shape = colour_grid.shape[2:]
 
         # Backbone
-        features = backbone(colour_grid)
+        features = backbone(images)
 
         # Semantic head
-        outputs = semantic_head(features, grid_shape)
+        outputs = semantic_head(features)
         
         # Compute loss
-        loss = criterion(outputs, seg_grid)
+        loss = criterion(outputs, masks)
         running_loss += loss.item()
 
         # Calculate metrics
-        metrics_tracker.update(outputs, seg_grid)
+        metrics_tracker.update(outputs, masks)
+        break
 
     # Compute metrics
     metrics = metrics_tracker.compute()
@@ -123,20 +127,21 @@ for epoch in range(args.num_epochs):
             images = images.to(args.device)
             masks = masks.to(args.device)
             lens = lens.to(args.device)
-            cam_grid, colour_grid, seg_grid = create_mesh(images, masks, lens)
-            grid_shape = colour_grid.shape[2:]
-            features = backbone(colour_grid)
-            outputs = semantic_head(features, grid_shape)
 
-            # Single batch, flatten the batch dimension
-            outputs = outputs.view(len(args.classes), outputs.shape[2], outputs.shape[3])
-            colour_grid = colour_grid.view(3, colour_grid.shape[2], colour_grid.shape[3])
-            images = images.view(3, images.shape[2], images.shape[3])
+            # cam_grid, colour_grid, seg_grid = create_mesh(images, masks, lens)
+            # grid_shape = colour_grid.shape[2:]
+
+            features = backbone(colour_grid)
+            outputs = semantic_head(features)
+
+            # Argmax the outputs to get the predicted class indices
+            outputs = outputs.argmax(dim=0).cpu().numpy()
+            outputs = torch.tensor(outputs, dtype=torch.long)
 
             # Convert outputs to colours
-            outputs = colourise(outputs.argmax(dim=0).cpu().numpy(), args.classes)
+            # outputs = colourise(outputs.argmax(dim=0).cpu().numpy(), args.classes)
 
-            write_images(epoch, colour_grid, outputs, images, i)
+            write_images(epoch, colour_grid, outputs, images, args.classes, i)
 
     # Print metrics
     print(f"Epoch [{epoch+1}/{args.num_epochs}], Loss: {running_loss/len(train_loader):.4f}, "

@@ -36,7 +36,7 @@ class SoccerSegmentationDataset(Dataset):
             T.Lambda(lambda x: x[:3, :, :] if x.shape[0] == 4 else x),
         ])
 
-        self.joint_transform = JointTransform(hflip=True, rotation=True)
+        # self.joint_transform = JointTransform(hflip=True, rotation=True)
 
     def __len__(self):
         return len(self.image_paths)
@@ -59,13 +59,14 @@ class SoccerSegmentationDataset(Dataset):
         mask = Image.open(self.mask_paths[idx])
 
         # Apply transforms
-        image = self.image_transform(image)
+        image = self.image_transform(image).to(torch.float32)
         mask = self.mask_transform(mask)
+
 
         # Apply joint augmentations (augmentation)
         # if self.joint_transform:
         #     image, mask = self.joint_transform(image, mask)
-            
+
         # Convert mask to classes
         mask = mask_to_class_indices(mask, self.classes).long() # Convert to class indices
 
