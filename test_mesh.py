@@ -10,7 +10,7 @@ from dataset import SoccerSegmentationDataset
 classes = [
     (0, 0, 0), # black background
     (255, 0, 0), # red ball
-    (0, 255, 255), # yellow goal
+    (255, 255, 0), # yellow goal
     (0, 0, 255), # blue robot
     (0, 255, 0), # green field
     (255, 255, 255), # white line
@@ -40,7 +40,7 @@ def mask_to_class_indices(mask: torch.Tensor, classes: list[tuple[int, int, int]
     # Get class indices or fallback to 0 (unknown)
     indices = matches.argmax(dim=1)  # If no match, returns 0 (safe default)
     return indices.reshape(h, w)
-
+    
 def indices_to_mask(indices: torch.Tensor, classes: list[tuple[int, int, int]]) -> torch.Tensor:
     """
     Convert class index mask (H,W) to RGB mask (3,H,W) using vectorized matching.
@@ -124,8 +124,8 @@ def create_mesh(image, mask, lens):
     Hoc = Hoc.unsqueeze(0)  # [1, 4, 4]
 
     # Create a ground plane grid
-    height = 6
-    width = 12
+    height = 8
+    width = 6
     spacing = 0.03
     xs = torch.linspace(0, 6, int(height / spacing))
     ys = torch.linspace(-width / 2, width / 2, int(width / spacing))
@@ -245,17 +245,16 @@ def data_to_tensor(image, mask):
     mask = mask.unsqueeze(0)  # [1, H, W]
     return image, mask
 
-
 if __name__ == "__main__":
-    dataset = SoccerSegmentationDataset(folder="./real_data", classes=classes)
-    dataloader = torch.utils.data.DataLoader(dataset, batch_size=1, shuffle=False)
+    dataset = SoccerSegmentationDataset(folder="./real_eindhoven", classes=classes)
+    dataloader = torch.utils.data.DataLoader(dataset, batch_size=1, shuffle=True)
     for i, (image, mask, lens) in enumerate(dataloader):
         create_mesh(image, mask, lens[0])
     
     create_mesh(image, mask, lens[0])
 
-    image = Image.open("test/image.jpg").convert("RGB")
-    mask = Image.open("test/mask.png")
-    lens = load_lens_params("test/lens.yaml")
-    image, mask = data_to_tensor(image, mask)
-    create_mesh(image, mask, lens)
+    # image = Image.open("test/image.jpg").convert("RGB")
+    # mask = Image.open("test/mask.png")
+    # lens = load_lens_params("test/lens.yaml")
+    # image, mask = data_to_tensor(image, mask)
+    # create_mesh(image, mask, lens)
