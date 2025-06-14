@@ -16,6 +16,8 @@ class FeatureBackbone(torch.nn.Module):
         else:
             raise ValueError("Unsupported backbone. Choose 'mobilenetv3' or 'efficientnet'.")
 
+        for param in self.backbone.parameters():
+            param.requires_grad = False
 
     def forward(self, x, size):
         x = self.backbone(x)
