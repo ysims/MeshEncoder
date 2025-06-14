@@ -16,7 +16,7 @@ def get_args():
     args.classes = [
         (0, 0, 0), # black background
         (255, 0, 0), # red ball
-        (0, 255, 255), # yellow goal
+        (255, 255, 0), # yellow goal
         (0, 0, 255), # blue robot
         (0, 255, 0), # green field
         (255, 255, 255), # white line

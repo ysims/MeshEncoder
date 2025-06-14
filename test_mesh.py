@@ -72,7 +72,7 @@ def project_to_image(grid, centre, focal, k, Hoc):
     Hco = torch.linalg.inv(Hoc)  # [B, 4, 4]
 
     R = Hco[:, :3, :3]  # [B, 3, 3]
-    t = torch.zeros((B, 3, 1))  # [B, 3, 1]
+    t = torch.zeros((B, 3, 1), device=grid.device, dtype=grid.dtype)  # [B, 3, 1]
     t[:, 2, 0] = -Hoc[:, 2, 3]
 
     # Transform grid points to camera coordinates
@@ -85,21 +85,21 @@ def project_to_image(grid, centre, focal, k, Hoc):
         [0, -1, 0],
         [0,  0, -1],
         [1,  0, 0],
-    ], dtype=torch.float32).expand(B, -1, -1)  # [B, 3, 3]
+    ], dtype=grid.dtype, device=grid.device).expand(B, -1, -1)  # [B, 3, 3]
 
     cam_points = torch.bmm(R_robot_to_camera, cam_points.transpose(1, 2)).transpose(1, 2)  # [B, N, 3]
 
     # Project to image plane
     x, y, z = cam_points[..., 0], cam_points[..., 1], cam_points[..., 2]
     theta = torch.atan2(torch.sqrt(x**2 + y**2), z)
-    
-    focal = focal.expand_as(theta)  # [B, N]
-    k = k.unsqueeze(1).expand(-1, theta.shape[1], -1)  # [B, N, 2]
+
+    focal = focal.unsqueeze(1).expand(-1, N)  # [B, N]
+    k = k.unsqueeze(1).expand(-1, N, -1)      # [B, N, 2]
 
     r = focal * theta * (1 + k[..., 0] * theta**2 + k[..., 1] * theta**4)  # [B, N]
     phi = torch.atan2(y, x)  # [B, N]
-    u = r * torch.cos(phi) + centre[..., 0].unsqueeze(1)  # [B, N]
-    v = r * torch.sin(phi) + centre[..., 1].unsqueeze(1)  # [B, N]
+    u = r * torch.cos(phi) + centre[:, 0].unsqueeze(1)  # [B, N]
+    v = r * torch.sin(phi) + centre[:, 1].unsqueeze(1)  # [B, N]
 
     pixels = torch.stack([u, v], dim=-1)  # [B, N, 2]
 
@@ -113,15 +113,11 @@ def create_mesh(image, mask, lens):
 
     B, img_height, img_width, _ = image.shape
 
-    centre = lens[:2]
-    centre = np.array([centre[0] + img_width / 2, centre[1] + img_height / 2])
-    centre = torch.tensor(centre, dtype=torch.float32).unsqueeze(0)
-    focal_length = lens[2]
-    focal_length = torch.tensor(focal_length, dtype=torch.float32).unsqueeze(0)
-    k = lens[3:5]
-    k = torch.tensor(k, dtype=torch.float32).unsqueeze(0)
-    Hoc = lens[5:].view(4, 4)
-    Hoc = Hoc.unsqueeze(0)  # [1, 4, 4]
+    centre = lens[:,:2]
+    centre = centre + torch.tensor([img_width / 2, img_height / 2], dtype=centre.dtype, device=centre.device).unsqueeze(0)
+    focal_length = lens[:,2]
+    k = lens[:,3:5]
+    Hoc = lens[:, 5:].view(B, 4, 4)
 
     # Create a ground plane grid
     height = 8
@@ -249,9 +245,9 @@ if __name__ == "__main__":
     dataset = SoccerSegmentationDataset(folder="./real_eindhoven", classes=classes)
     dataloader = torch.utils.data.DataLoader(dataset, batch_size=1, shuffle=True)
     for i, (image, mask, lens) in enumerate(dataloader):
-        create_mesh(image, mask, lens[0])
+        create_mesh(image, mask, lens)
     
-    create_mesh(image, mask, lens[0])
+    # create_mesh(image, mask, lens[0])
 
     # image = Image.open("test/image.jpg").convert("RGB")
     # mask = Image.open("test/mask.png")

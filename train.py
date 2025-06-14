@@ -34,8 +34,7 @@ train_loader = DataLoader(train_dataset, batch_size=args.batch_size, shuffle=Tru
 val_loader = DataLoader(val_dataset, batch_size=args.batch_size, shuffle=False, num_workers=args.num_workers)
 
 # Create models - the backbone and the semantic head
-img_size = (1280, 1024)
-backbone = FeatureBackbone(img_size=img_size, backbone=args.backbone).to(args.device)
+backbone = FeatureBackbone(backbone=args.backbone).to(args.device)
 semantic_head = SemanticHead(in_channels=backbone.output_size, num_classes=len(args.classes)).to(args.device) 
 
 # Optimiser
@@ -62,21 +61,18 @@ for epoch in range(args.num_epochs):
         
         images = images.to(args.device)
         masks = masks.to(args.device)
-        
+        lens = lens.to(args.device)
+
         # Sample ground plane mesh
-        # cam_grid, colour_grid, seg_grid = create_mesh(images, masks, lens)
-        # grid_shape = colour_grid.shape[2:]
+        cam_grid, colour_grid, seg_grid = create_mesh(images, masks, lens, args.classes)
+        grid_shape = colour_grid.shape[2:]
 
         # Backbone
-        features = backbone(images)
-        print(features.shape)
-
+        features = backbone(colour_grid, grid_shape)
         # Semantic head
         outputs = semantic_head(features)
-
         # Compute loss
-        print(outputs.shape, masks.shape)
-        loss = criterion(outputs, masks)
+        loss = criterion(outputs, seg_grid)
 
         try:
             loss.backward()
@@ -94,23 +90,24 @@ for epoch in range(args.num_epochs):
 
         images = images.to(args.device)
         masks = masks.to(args.device)
+        lens = lens.to(args.device)
 
         # Sample ground plane mesh
-        # cam_grid, colour_grid, seg_grid = create_mesh(images, masks, lens)
-        # grid_shape = colour_grid.shape[2:]
+        cam_grid, colour_grid, seg_grid = create_mesh(images, masks, lens, args.classes)
+        grid_shape = colour_grid.shape[2:]
 
         # Backbone
-        features = backbone(images)
+        features = backbone(colour_grid, grid_shape)
 
         # Semantic head
         outputs = semantic_head(features)
         
         # Compute loss
-        loss = criterion(outputs, masks)
+        loss = criterion(outputs, seg_grid)
         running_loss += loss.item()
 
         # Calculate metrics
-        metrics_tracker.update(outputs, masks)
+        metrics_tracker.update(outputs, seg_grid)
         break
 
     # Compute metrics
@@ -128,10 +125,10 @@ for epoch in range(args.num_epochs):
             masks = masks.to(args.device)
             lens = lens.to(args.device)
 
-            # cam_grid, colour_grid, seg_grid = create_mesh(images, masks, lens)
-            # grid_shape = colour_grid.shape[2:]
+            cam_grid, colour_grid, seg_grid = create_mesh(images, masks, lens, args.classes)
+            grid_shape = colour_grid.shape[2:]
 
-            features = backbone(colour_grid)
+            features = backbone(colour_grid, grid_shape)
             outputs = semantic_head(features)
 
             # Argmax the outputs to get the predicted class indices
@@ -145,5 +142,5 @@ for epoch in range(args.num_epochs):
 
     # Print metrics
     print(f"Epoch [{epoch+1}/{args.num_epochs}], Loss: {running_loss/len(train_loader):.4f}, "
-          f"Precision: {metrics['precision']}, Recall: {metrics['recall']}")
+          f"\nPrecision: {metrics['precision']}, \nRecall: {metrics['recall']}")
     
