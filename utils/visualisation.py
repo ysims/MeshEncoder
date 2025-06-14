@@ -6,20 +6,16 @@ import torch
 writer = SummaryWriter(log_dir="./runs")
 
 
-def indices_to_mask(indices: torch.Tensor, classes: list[tuple[int, int, int]]) -> torch.Tensor:
+def onehot_to_mask(onehot: torch.Tensor, classes: list[tuple[int, int, int]]) -> np.ndarray:
     """
-    Convert class index mask (C, H, W) to RGB mask (H, W, 3) using vectorized matching.
+    Convert a one-hot encoded mask [num_classes, H, W] to an RGB mask [H, W, 3].
     """
-    c, h, w = indices.shape  # C is the number of classes
-    classes_tensor = torch.tensor(classes, dtype=torch.uint8, device=indices.device)  # [C, 3]
-
-    # Ensure indices is in the shape [H, W] by taking the argmax along the class dimension
-    class_indices = indices.argmax(dim=0)  # [H, W]
-
-    # Map class indices to RGB values
-    mask = classes_tensor[class_indices.flatten()]  # [H*W, 3]
-    mask = mask.view(h, w, 3)  # [H, W, 3]
-    return mask
+    # onehot: [num_classes, H, W]
+    indices = torch.argmax(onehot, dim=0)  # [H, W]
+    indices = indices.cpu().numpy()  # [H, W]
+    classes_arr = np.array(classes, dtype=np.uint8)  # [num_classes, 3]
+    rgb_mask = classes_arr[indices]  # [H, W, 3]
+    return rgb_mask
 
 def write_plots(epoch, epoch_loss, precision, recall):
     writer.add_scalar("Loss/train", epoch_loss, epoch)
@@ -29,45 +25,38 @@ def write_plots(epoch, epoch_loss, precision, recall):
         writer.add_scalar(f"Recall/{class_name}", r, epoch)
 
 def write_images(epoch, colour_grid, mask, image, classes, i):
-    # Unnormalise the image and permute the axes
-    colour_grid = colour_grid.permute(0, 3, 2, 1)  # [B, H, W, C]
-    colour_grid = colour_grid.squeeze(0)
-    colour_grid = colour_grid.cpu().numpy()
-    mean = np.array([0.485, 0.456, 0.406])
-    std = np.array([0.229, 0.224, 0.225])
-    colour_grid = (colour_grid * std + mean) * 255
-    colour_grid = np.clip(colour_grid, 0, 255).astype(np.uint8)   
+    # Unnormalize and convert image to [H, W, C], uint8
+    mean = np.array([0.485, 0.456, 0.406]).reshape(3, 1, 1)
+    std = np.array([0.229, 0.224, 0.225]).reshape(3, 1, 1)
     
-    # Convert to mask colours and squeeze the batch dimension
-    mask = indices_to_mask(mask, classes)
-    mask = mask.squeeze(0)
-    mask = mask.cpu().numpy()
-    mask = mask.reshape(mask.shape[1], mask.shape[0], 3)
-    
-    # Squeeze the image
-    image = image.permute(0, 3, 2, 1)  # [B, H, W, C]
-    image = image.squeeze(0)
-    image = image.cpu().numpy()
+    image = image.squeeze(0).cpu().numpy()  # [C, H, W]
+    image = (image * std + mean)  # [C, H, W], float32 in [0,1]
+    image = np.clip(image, 0, 1)
+    image = np.transpose(image, (1, 2, 0))  # [H, W, C]
 
-    # fig, axes = plt.subplots(1, 3, figsize=(12, 4))
-    # titles = ['Colour Grid', 'Predicted Mask', 'Original Image']
-    
-    # (200, 300, 3) (200, 300, 3)
-    # print(colour_grid.shape, mask.shape, image.shape)
+    # Unnormalize colour_grid the same way as image
+    colour_grid = colour_grid.squeeze(0).cpu().numpy()
+    colour_grid = (colour_grid * std + mean)
+    colour_grid = np.clip(colour_grid, 0, 1)
+    colour_grid = np.transpose(colour_grid, (1, 2, 0))  # [H, W, C]
 
-    # Visualize the results
-    # plt.figure(figsize=(12, 6))
-    # plt.subplot(1, 3, 1)
-    # plt.imshow(colour_grid)
-    # plt.title("Colour Grid")
-    # plt.axis('off')
-    # plt.subplot(1, 3, 2)
-    # plt.imshow(mask, cmap='gray')
-    # plt.title("Segmentation Grid")
-    # plt.axis('off')
-    # # plt.show()
-    # plt.subplot(1, 3, 3)
-    # plt.imshow(image)
-    # plt.title("Original Image")
-    # plt.axis('off')
-    # plt.show()
+    # Mask: convert to RGB, [H, W, 3], uint8
+    print(f"Mask shape: {mask.shape}")
+    mask = onehot_to_mask(mask, classes)  # [H, W, C]
+    print(f"Mask shape: {mask.shape}")
+    # mask = np.clip(mask, 0, 255).astype(np.uint8)
+
+    plt.figure(figsize=(12, 6))
+    plt.subplot(1, 3, 1)
+    plt.imshow(colour_grid)
+    plt.title("Colour Grid")
+    plt.axis('off')
+    plt.subplot(1, 3, 2)
+    plt.imshow(mask)
+    plt.title("Segmentation Grid")
+    plt.axis('off')
+    plt.subplot(1, 3, 3)
+    plt.imshow(image)
+    plt.title("Original Image")
+    plt.axis('off')
+    plt.show()
