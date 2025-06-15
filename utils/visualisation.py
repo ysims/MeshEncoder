@@ -31,7 +31,7 @@ def write_plots(epoch, epoch_loss, precision, recall):
     for class_name, r in recall.items():
         writer.add_scalar(f"Recall/{class_name}", r, epoch)
 
-def write_images(epoch, colour_grid, mask, image, classes, i):
+def write_images(epoch, colour_grid, mask, image, seg_grid, classes, i):
     # Unnormalize and convert image to [H, W, C], uint8
     mean = np.array([0.485, 0.456, 0.406]).reshape(3, 1, 1)  # [C, 1, 1]
     std = np.array([0.229, 0.224, 0.225]).reshape(3, 1, 1)  # [C, 1, 1]
@@ -45,14 +45,30 @@ def write_images(epoch, colour_grid, mask, image, classes, i):
     colour_grid = colour_grid.squeeze(0).cpu().numpy()
     colour_grid = (colour_grid * std + mean) * 255
     colour_grid = np.clip(colour_grid, 0, 255).astype(np.uint8)
-    colour_grid = np.transpose(colour_grid, (1, 2, 0))  # [H, W, C]
+    colour_grid = np.transpose(colour_grid, (2, 1, 0))  # [H, W, C]
+
+    # Seg grid
+    seg_grid = indices_to_mask(seg_grid, classes)  # [H, W, C]
+    seg_grid = seg_grid.squeeze(0).numpy()  # [H, W, C]
+    seg_grid = np.transpose(seg_grid, (1, 0, 2))  # [H, W, C]
 
     # Mask: convert to RGB, [H, W, 3], uint8
     mask = indices_to_mask(mask, classes)  # [H, W, C]
-    mask = mask.squeeze(0).numpy()  # Scale to [0, 255]
+    mask = mask.squeeze(0)  # Remove batch dimension
+    mask = np.transpose(mask, (1, 0, 2))  # [H, W, C]
+    mask = mask.numpy()  # Scale to [0, 255]
+
+    # Flip the mask vertically to match the image orientation
+    # mask = np.flipud(mask) 
+    # mask = np.fliplr(mask) 
+    colour_grid = np.flipud(colour_grid) 
+    colour_grid = np.fliplr(colour_grid) 
+    seg_grid = np.flipud(seg_grid)
+    seg_grid = np.fliplr(seg_grid)
 
     # Write to TensorBoard with raw, predicted mask, colour grid next to each other for easy comparison
-    writer.add_image(f"{i}/Image", image, epoch, dataformats='HWC')
-    writer.add_image(f"{i}/Grid", colour_grid, epoch, dataformats='HWC')
-    writer.add_image(f"{i}/Mask", mask, epoch, dataformats='HWC')
+    writer.add_image(f"{i}/A-Grid", colour_grid, epoch, dataformats='HWC')
+    writer.add_image(f"{i}/B-Mask", mask, epoch, dataformats='HWC')
+    writer.add_image(f"{i}/C-True Mask", seg_grid, epoch, dataformats='HWC')
+    writer.add_image(f"{i}/D-Raw Image", image, epoch, dataformats='HWC')
     

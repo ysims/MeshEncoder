@@ -71,7 +71,7 @@ for epoch in range(args.num_epochs):
         # Backbone
         features = backbone(colour_grid, grid_shape)
         # Semantic head
-        outputs = semantic_head(features)
+        outputs = semantic_head(features, grid_shape)
         # Compute loss
         loss = criterion(outputs, seg_grid)
 
@@ -101,7 +101,7 @@ for epoch in range(args.num_epochs):
         features = backbone(colour_grid, grid_shape)
 
         # Semantic head
-        outputs = semantic_head(features)
+        outputs = semantic_head(features, grid_shape)
         
         # Compute loss
         loss = criterion(outputs, seg_grid)
@@ -132,14 +132,16 @@ for epoch in range(args.num_epochs):
                 grid_shape = colour_grid.shape[2:]
 
                 features = backbone(colour_grid, grid_shape)
-                outputs = semantic_head(features)
+                outputs = semantic_head(features, grid_shape)
                 outputs = torch.softmax(outputs, dim=1)
                 preds = outputs.argmax(dim=1).cpu()
 
-                write_images(epoch, colour_grid, preds, image, args.classes, i)
+                write_images(epoch, colour_grid, preds, image, seg_grid.cpu(), args.classes, count)
                 count += 1
 
     # Print metrics
+    precision_str = {k: f"{v:.4f}" for k, v in metrics['precision'].items()}
+    recall_str = {k: f"{v:.4f}" for k, v in metrics['recall'].items()}
     print(f"Epoch [{epoch+1}/{args.num_epochs}], Loss: {running_loss/len(train_loader):.4f}, "
-          f"\nPrecision: {metrics['precision']}, \nRecall: {metrics['recall']}")
+        f"\nPrecision: {precision_str}, \nRecall: {recall_str}")
     
