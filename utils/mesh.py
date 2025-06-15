@@ -1,6 +1,7 @@
 import torch
 import numpy as np
 from matplotlib import pyplot as plt
+import torch.nn.functional as F
 
 def mask_to_class_indices(mask: torch.Tensor, classes: list[tuple[int, int, int]]) -> torch.Tensor:
     """
@@ -31,6 +32,48 @@ def indices_to_mask(indices: torch.Tensor, classes: list[tuple[int, int, int]]) 
     return mask.reshape(b, h, w, 3)  # [B, 3, H, W]
 
 
+def remove_yaw(Hoc):
+    """
+    Remove yaw from Hoc by forcing the X axis to lie in the XZ plane (no left/right yaw),
+    while preserving pitch. Computes orthonormal Y and Z axes accordingly.
+    """
+    single = False
+
+    R = Hoc[:, :3, :3]  # [B, 3, 3]
+    t = Hoc[:, :3, 3]   # [B, 3]
+    B = Hoc.shape[0]
+
+    # Original x (forward direction)
+    x = R[:, :, 0]  # [B, 3]
+
+    # Remove yaw: project x onto XZ plane
+    x_flat = x.clone()
+    x_flat[:, 1] = 0
+    x_flat = F.normalize(x_flat, dim=1)  # [B, 3]
+
+    # Rebuild an orthonormal basis
+    # Use world up as approximate up vector
+    world_up = torch.tensor([0.0, 0.0, 1.0], device=Hoc.device, dtype=Hoc.dtype).expand(B, 3)
+
+    # Compute z = project up vector onto plane orthogonal to x_flat
+    z = world_up - (world_up * x_flat).sum(dim=1, keepdim=True) * x_flat
+    z = F.normalize(z, dim=1)
+
+    # Compute y = z × x
+    y = torch.cross(z, x_flat, dim=1)
+
+    # Stack into rotation matrix
+    R_new = torch.stack([x_flat, y, z], dim=2)  # [B, 3, 3]
+
+    # Assemble full 4x4 matrix
+    Hoc_new = torch.eye(4, device=Hoc.device, dtype=Hoc.dtype).expand(B, -1, -1).clone()
+    Hoc_new[:, :3, :3] = R_new
+    Hoc_new[:, :3, 3] = t
+
+    if single:
+        return Hoc_new[0]
+    return Hoc_new
+
 def project_to_image(grid, centre, focal, k, Hoc):
     """
     Project batched 3D world points to 2D image pixels using a fisheye equidistant model.
@@ -48,7 +91,8 @@ def project_to_image(grid, centre, focal, k, Hoc):
     """
     B, N, _ = grid.shape
     device = grid.device
-    Hco = torch.linalg.inv(Hoc)  # [B, 4, 4]
+    Hoc = remove_yaw(Hoc)
+    Hco = torch.linalg.inv(Hoc)
 
     R = Hco[:, :3, :3]  # [B, 3, 3]
     t = torch.zeros((B, 3, 1), device=grid.device, dtype=grid.dtype)  # [B, 3, 1]
@@ -100,8 +144,8 @@ def create_mesh(image, mask, lens, classes):
     Hoc = lens[:, 5:].view(B, 4, 4)
 
     # Create a ground plane grid
-    height = 8
-    width = 6
+    height = 12
+    width = 12
     spacing = 0.03
     xs = torch.linspace(0, 6, int(height / spacing))
     ys = torch.linspace(-width / 2, width / 2, int(width / spacing))
