@@ -65,6 +65,8 @@ def write_images(epoch, colour_grid, mask, image, seg_grid, classes, i):
     colour_grid = np.fliplr(colour_grid) 
     seg_grid = np.flipud(seg_grid)
     seg_grid = np.fliplr(seg_grid)
+    mask = np.flipud(mask)
+    mask = np.fliplr(mask)
 
     # Write to TensorBoard with raw, predicted mask, colour grid next to each other for easy comparison
     writer.add_image(f"{i}/A-Grid", colour_grid, epoch, dataformats='HWC')
