@@ -3,19 +3,26 @@ from matplotlib import pyplot as plt
 import numpy as np
 import torch 
 
-writer = SummaryWriter(log_dir="./runs")
+# Clear the previous logs and make a writer
+import shutil
+log_dir = "./runs"
+shutil.rmtree(log_dir, ignore_errors=True)
+writer = SummaryWriter(log_dir=log_dir)
 
+# print full numpy array
+np.set_printoptions(threshold=np.inf, linewidth=200, precision=3, suppress=True)
 
-def onehot_to_mask(onehot: torch.Tensor, classes: list[tuple[int, int, int]]) -> np.ndarray:
+def indices_to_mask(indices: torch.Tensor, classes: list[tuple[int, int, int]]) -> torch.Tensor:
     """
-    Convert a one-hot encoded mask [num_classes, H, W] to an RGB mask [H, W, 3].
+    Convert class index mask (H,W) to RGB mask (3,H,W) using vectorized matching.
     """
-    # onehot: [num_classes, H, W]
-    indices = torch.argmax(onehot, dim=0)  # [H, W]
-    indices = indices.cpu().numpy()  # [H, W]
-    classes_arr = np.array(classes, dtype=np.uint8)  # [num_classes, 3]
-    rgb_mask = classes_arr[indices]  # [H, W, 3]
-    return rgb_mask
+    b, h, w = indices.shape
+    classes_tensor = torch.tensor(classes, dtype=torch.uint8, device=indices.device)  # [C, 3]
+    
+    # Create a mask of shape [H*W, 3] by repeating the classes tensor
+    mask = classes_tensor[indices.flatten()]  # [B, H*W, 3]
+    
+    return mask.reshape(b, h, w, 3)  # [B, 3, H, W]
 
 def write_plots(epoch, epoch_loss, precision, recall):
     writer.add_scalar("Loss/train", epoch_loss, epoch)
@@ -26,37 +33,26 @@ def write_plots(epoch, epoch_loss, precision, recall):
 
 def write_images(epoch, colour_grid, mask, image, classes, i):
     # Unnormalize and convert image to [H, W, C], uint8
-    mean = np.array([0.485, 0.456, 0.406]).reshape(3, 1, 1)
-    std = np.array([0.229, 0.224, 0.225]).reshape(3, 1, 1)
+    mean = np.array([0.485, 0.456, 0.406]).reshape(3, 1, 1)  # [C, 1, 1]
+    std = np.array([0.229, 0.224, 0.225]).reshape(3, 1, 1)  # [C, 1, 1]
     
     image = image.squeeze(0).cpu().numpy()  # [C, H, W]
     image = (image * std + mean)  # [C, H, W], float32 in [0,1]
-    image = np.clip(image, 0, 1)
+    # image = np.clip(image, 0, 1)
     image = np.transpose(image, (1, 2, 0))  # [H, W, C]
 
     # Unnormalize colour_grid the same way as image
     colour_grid = colour_grid.squeeze(0).cpu().numpy()
-    colour_grid = (colour_grid * std + mean)
-    colour_grid = np.clip(colour_grid, 0, 1)
+    colour_grid = (colour_grid * std + mean) * 255
+    colour_grid = np.clip(colour_grid, 0, 255).astype(np.uint8)
     colour_grid = np.transpose(colour_grid, (1, 2, 0))  # [H, W, C]
 
     # Mask: convert to RGB, [H, W, 3], uint8
-    print(f"Mask shape: {mask.shape}")
-    mask = onehot_to_mask(mask, classes)  # [H, W, C]
-    print(f"Mask shape: {mask.shape}")
-    # mask = np.clip(mask, 0, 255).astype(np.uint8)
+    mask = indices_to_mask(mask, classes)  # [H, W, C]
+    mask = mask.squeeze(0).numpy()  # Scale to [0, 255]
 
-    plt.figure(figsize=(12, 6))
-    plt.subplot(1, 3, 1)
-    plt.imshow(colour_grid)
-    plt.title("Colour Grid")
-    plt.axis('off')
-    plt.subplot(1, 3, 2)
-    plt.imshow(mask)
-    plt.title("Segmentation Grid")
-    plt.axis('off')
-    plt.subplot(1, 3, 3)
-    plt.imshow(image)
-    plt.title("Original Image")
-    plt.axis('off')
-    plt.show()
+    # Write to TensorBoard with raw, predicted mask, colour grid next to each other for easy comparison
+    writer.add_image(f"{i}/Image", image, epoch, dataformats='HWC')
+    writer.add_image(f"{i}/Grid", colour_grid, epoch, dataformats='HWC')
+    writer.add_image(f"{i}/Mask", mask, epoch, dataformats='HWC')
+    

@@ -3,7 +3,7 @@ import torch
 
 def get_args():
     parser = argparse.ArgumentParser(description="Train a segmentation model")
-    parser.add_argument("--batch_size", type=int, default=1, help="Batch size for training")
+    parser.add_argument("--batch_size", type=int, default=8, help="Batch size for training")
     parser.add_argument("--num_epochs", type=int, default=50, help="Number of epochs to train")
     parser.add_argument("--learning_rate", type=float, default=0.001, help="Learning rate for the optimizer")
     parser.add_argument("--weight_decay", type=float, default=0.0001, help="Weight decay for the optimizer")

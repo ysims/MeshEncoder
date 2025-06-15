@@ -13,6 +13,7 @@ import torch.nn as nn
 import torch.optim as optim
 from torch.utils.data import DataLoader
 import numpy as np
+np.set_printoptions(threshold=np.inf, linewidth=200, precision=3, suppress=True)
 
 # Convert to RGB with a color map
 def colourise(mask, palette):
@@ -25,7 +26,7 @@ def colourise(mask, palette):
 args = get_args()
 
 # Create dataset and dataloader
-dataset = SoccerSegmentationDataset(folder="./real_data", classes=args.classes)
+dataset = SoccerSegmentationDataset(folder="./real_eindhoven", classes=args.classes)
 train_size = int(len(dataset) * 0.6)
 val_size = len(dataset) - train_size
 
@@ -64,7 +65,7 @@ for epoch in range(args.num_epochs):
         lens = lens.to(args.device)
 
         # Sample ground plane mesh
-        cam_grid, colour_grid, seg_grid = create_mesh(images, masks, lens, args.classes)
+        colour_grid, cam_grid, seg_grid = create_mesh(images, masks, lens, args.classes)
         grid_shape = colour_grid.shape[2:]
 
         # Backbone
@@ -93,7 +94,7 @@ for epoch in range(args.num_epochs):
         lens = lens.to(args.device)
 
         # Sample ground plane mesh
-        cam_grid, colour_grid, seg_grid = create_mesh(images, masks, lens, args.classes)
+        colour_grid, cam_grid, seg_grid = create_mesh(images, masks, lens, args.classes)
         grid_shape = colour_grid.shape[2:]
 
         # Backbone
@@ -117,28 +118,26 @@ for epoch in range(args.num_epochs):
     write_plots(epoch, running_loss/len(train_loader), metrics['precision'], metrics['recall'])
     
     # Get ten images from the val loader
-    for i in range(1):
-        with torch.no_grad():
-            # Get a batch of images and masks
-            images, masks, lens = next(iter(val_loader))
-            images = images.to(args.device)
-            masks = masks.to(args.device)
-            lens = lens.to(args.device)
+    count = 0
+    with torch.no_grad():
+        for i, (images, masks, lens) in enumerate(val_loader):
+            for image, mask, lens in zip(images, masks, lens):
+                if count >= 10:
+                    break
+                image = image.to(args.device).unsqueeze(0)  # Add batch dimension
+                mask = mask.to(args.device).unsqueeze(0)  # Add batch dimension
+                lens = lens.to(args.device).unsqueeze(0)  # Add batch dimension
 
-            cam_grid, colour_grid, seg_grid = create_mesh(images, masks, lens, args.classes)
-            grid_shape = colour_grid.shape[2:]
+                colour_grid, cam_grid, seg_grid = create_mesh(image, mask, lens, args.classes)
+                grid_shape = colour_grid.shape[2:]
 
-            features = backbone(colour_grid, grid_shape)
-            outputs = semantic_head(features)
+                features = backbone(colour_grid, grid_shape)
+                outputs = semantic_head(features)
+                outputs = torch.softmax(outputs, dim=1)
+                preds = outputs.argmax(dim=1).cpu()
 
-            # Argmax the outputs to get the predicted class indices
-            outputs = outputs.argmax(dim=0).cpu().numpy()
-            outputs = torch.tensor(outputs, dtype=torch.long)
-
-            # Convert outputs to colours
-            # outputs = colourise(outputs.argmax(dim=0).cpu().numpy(), args.classes)
-
-            write_images(epoch, colour_grid, outputs, images, args.classes, i)
+                write_images(epoch, colour_grid, preds, image, args.classes, i)
+                count += 1
 
     # Print metrics
     print(f"Epoch [{epoch+1}/{args.num_epochs}], Loss: {running_loss/len(train_loader):.4f}, "
