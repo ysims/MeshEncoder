@@ -22,7 +22,7 @@ class FeatureBackbone(torch.nn.Module):
     def forward(self, x, size):
         x = self.backbone(x)
         # Upsample the feature map to the desired image size
-        x = torch.nn.functional.interpolate(x, size=size, mode='bilinear', align_corners=False)
+        # x = torch.nn.functional.interpolate(x, size=size, mode='bilinear', align_corners=False)
         return x 
     
     
